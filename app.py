@@ -14,6 +14,7 @@ from core.detect import analyze
 
 # Only the normed_embedding is needed by inswapper — save as plain numpy
 SOURCE_FACE_FILE = Path("/tmp/synthetic_demo_source.npy")
+EXPRESSION_FILE  = Path("/tmp/synthetic_demo_expression.txt")
 
 
 class _FaceEmbed:
@@ -264,15 +265,24 @@ def _piecewise_affine_warp(img, src_pts, dst_pts):
     return result
 
 
-def _apply_expression(img_bgr, face, expression):
+def _read_expression():
+    """Read the current expression from disk (works across Gradio worker processes)."""
+    try:
+        return EXPRESSION_FILE.read_text().strip()
+    except Exception:
+        return "neutral"
+
+
+def _apply_expression(img_bgr, face):
     """Apply expression warp to img_bgr using face.landmark_2d_106."""
+    expression = _read_expression()
     if expression == "neutral":
-        return img_bgr
+        return img_bgr, expression
     lm = getattr(face, "landmark_2d_106", None)
     if lm is None:
-        return img_bgr
+        return img_bgr, expression
     dst = _compute_expression_deltas(lm, expression)
-    return _piecewise_affine_warp(img_bgr, lm, dst)
+    return _piecewise_affine_warp(img_bgr, lm, dst), expression
 
 
 _EXPR_LABEL = {
@@ -300,13 +310,14 @@ def _draw_expr_label(img_bgr, expression):
     return img_bgr
 
 
-def _run_swap(small, orig_w, orig_h, source_face, expression):
+def _run_swap(small, orig_w, orig_h, source_face):
     """Swap, apply expression warp, scale up, watermark, return RGB."""
     global _last_swapped
     result = small.copy()
+    expression = "neutral"
     for face in _cached_faces:
         result = _swapper.get(result, face, source_face, paste_back=True)
-        result = _apply_expression(result, face, expression)
+        result, expression = _apply_expression(result, face)
     result = cv2.resize(result, (orig_w, orig_h))
     result = _draw_expr_label(result, expression)
     result = apply_visible(result)
@@ -314,7 +325,7 @@ def _run_swap(small, orig_w, orig_h, source_face, expression):
     return _last_swapped
 
 
-def process_frame(webcam_frame, expression):
+def process_frame(webcam_frame):
     global _frame_idx
 
     try:
@@ -339,7 +350,7 @@ def process_frame(webcam_frame, expression):
         if not _cached_faces:
             return _last_swapped if _last_swapped is not None else gr.skip()
 
-        return _run_swap(small, orig_w, orig_h, source_face, expression)
+        return _run_swap(small, orig_w, orig_h, source_face)
 
     except Exception as e:
         print(f"Frame error: {e}")
@@ -368,211 +379,185 @@ def run_detect(img_pil):
 # ---------------------------------------------------------------------------
 
 CSS = """
-:root {
-    --primary: #7c3aed;
-    --primary-light: #a78bfa;
-    --primary-dark: #5b21b6;
-    --bg: #0a0a0f;
-    --surface: #13131e;
-    --surface2: #1c1c2e;
-    --surface3: #252538;
-    --border: #2a2a45;
-    --text: #e8e8f0;
-    --muted: #7070a0;
-    --success: #10b981;
+* { box-sizing: border-box; }
+
+body, .gradio-container, .gradio-container > .main {
+    background: #0d0d14 !important;
+    color: #e2e2f0 !important;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
 }
 
-body, .gradio-container { background: var(--bg) !important; color: var(--text) !important; }
+/* hide Gradio footer branding */
+footer { display: none !important; }
 
-/* ── Header ── */
-.app-header {
-    text-align: center; padding: 2.5rem 1rem 1.5rem;
-    border-bottom: 1px solid var(--border); margin-bottom: 1.5rem;
-}
-.app-header h1 {
-    font-size: 2.4rem; font-weight: 800; letter-spacing: -0.5px;
-    background: linear-gradient(135deg, #7c3aed, #c084fc, #38bdf8);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    margin-bottom: 0.3rem;
-}
-.app-header p { color: var(--muted); font-size: 0.95rem; margin: 0; }
+/* tabs */
+.tab-nav button { color: #8888aa !important; font-weight: 500 !important; border-radius: 0 !important; }
+.tab-nav button.selected { color: #a78bfa !important; border-bottom: 2px solid #7c3aed !important; background: transparent !important; }
 
-/* ── Disclaimer ── */
-.disclaimer {
-    background: linear-gradient(135deg, #1a0a3e, #0f102a);
-    border: 1px solid #4c1d95; border-radius: 10px;
-    padding: 0.7rem 1.2rem; font-size: 0.82rem;
-    color: #c4b5fd; text-align: center; margin-bottom: 1.5rem;
-    letter-spacing: 0.01em;
-}
+/* all buttons default dark */
+button { background: #1e1e30 !important; border: 1px solid #2e2e48 !important; color: #e2e2f0 !important; border-radius: 8px !important; }
+button:hover { background: #28283e !important; border-color: #a78bfa !important; }
 
-/* ── Step card ── */
-.step-card {
-    background: var(--surface) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 16px !important;
-    padding: 1.5rem !important;
-}
-.step-header {
-    display: flex; align-items: center; gap: 0.6rem;
-    margin-bottom: 1rem; font-size: 0.95rem; font-weight: 600;
-}
-.step-badge {
-    display: inline-flex; align-items: center; justify-content: center;
-    background: linear-gradient(135deg, #7c3aed, #5b21b6);
-    color: white; border-radius: 50%;
-    width: 28px; height: 28px; font-size: 0.75rem; font-weight: 800;
-    flex-shrink: 0; box-shadow: 0 2px 8px rgba(124,58,237,0.4);
-}
-
-/* ── Image panels ── */
-.image-panel > div { border-radius: 12px !important; overflow: hidden !important; }
-.image-panel .wrap, .image-panel > .wrap {
-    background: var(--surface2) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 12px !important; min-height: 280px !important;
-}
-
-/* ── Status box ── */
-.status-box { margin-top: 0.5rem !important; }
-.status-box textarea {
-    background: var(--surface2) !important; border: 1px solid var(--border) !important;
-    border-radius: 8px !important; color: var(--success) !important;
-    font-size: 0.85rem !important; font-weight: 500 !important;
-}
-
-/* ── Expression buttons ── */
-.expr-row { display: flex !important; gap: 8px !important; margin-top: 0.5rem !important; }
-.expr-btn {
-    flex: 1 !important;
-    background: var(--surface3) !important;
-    border: 1.5px solid var(--border) !important;
-    border-radius: 10px !important; padding: 0.6rem 0.2rem !important;
-    font-size: 1.3rem !important; cursor: pointer !important;
-    transition: all 0.15s ease !important; display: flex !important;
-    flex-direction: column !important; align-items: center !important;
-    gap: 2px !important;
-}
-.expr-btn:hover {
-    border-color: var(--primary-light) !important;
-    background: #1e1040 !important; transform: translateY(-2px) !important;
-    box-shadow: 0 4px 16px rgba(124,58,237,0.3) !important;
-}
-.expr-label {
-    font-size: 0.6rem !important; color: var(--muted) !important;
-    font-weight: 500 !important; text-transform: uppercase !important;
-    letter-spacing: 0.05em !important;
-}
-
-/* ── Lock button ── */
-.lock-btn button {
-    width: 100% !important; background: linear-gradient(135deg, #7c3aed, #5b21b6) !important;
-    border: none !important; border-radius: 10px !important;
+/* primary (lock in face) button */
+button.primary, [data-testid="lock-btn"] button, #lock-btn button {
+    background: linear-gradient(135deg, #7c3aed, #5b21b6) !important;
+    border: none !important; color: #fff !important;
     font-weight: 700 !important; font-size: 1rem !important;
-    padding: 0.75rem !important; letter-spacing: 0.02em !important;
-    box-shadow: 0 4px 20px rgba(124,58,237,0.35) !important;
-    transition: all 0.2s !important;
+    padding: 0.7rem 1rem !important;
+    box-shadow: 0 4px 20px rgba(124,58,237,0.4) !important;
 }
-.lock-btn button:hover { box-shadow: 0 6px 28px rgba(124,58,237,0.55) !important; }
 
-/* ── Detection result ── */
+/* expression buttons */
+#expr-row button {
+    font-size: 1.4rem !important; padding: 0.8rem 0.2rem !important;
+    border-radius: 12px !important; border: 1.5px solid #2e2e48 !important;
+    background: #18182a !important; min-height: 64px !important;
+    display: flex !important; flex-direction: column !important; align-items: center !important;
+    transition: all 0.15s !important; line-height: 1.3 !important;
+}
+#expr-row button:hover {
+    border-color: #a78bfa !important; background: #221840 !important;
+    transform: translateY(-3px) !important;
+    box-shadow: 0 6px 20px rgba(124,58,237,0.35) !important;
+}
+
+/* image upload panels */
+.image-panel { background: #13131f !important; border: 1px solid #2a2a40 !important; border-radius: 12px !important; overflow: hidden !important; }
+.image-panel > div { border-radius: 12px !important; }
+
+/* textboxes */
+textarea, input[type=text] {
+    background: #18182a !important; border: 1px solid #2a2a40 !important;
+    color: #e2e2f0 !important; border-radius: 8px !important;
+}
+
+/* markdown detect result */
 .detect-result {
-    background: var(--surface2); border: 1px solid var(--border);
-    border-radius: 12px; padding: 1.5rem; min-height: 100px;
+    background: #18182a; border: 1px solid #2a2a40;
+    border-radius: 12px; padding: 1.5rem; min-height: 120px;
+    color: #e2e2f0;
 }
+"""
 
-/* ── Footer ── */
-.footer {
-    text-align: center; color: var(--muted); font-size: 0.78rem;
-    padding: 1.5rem 0 0.5rem; border-top: 1px solid var(--border); margin-top: 2rem;
+HEADER_HTML = """
+<style>
+.sfd-header {
+    text-align: center;
+    padding: 2.5rem 1rem 1.2rem;
+    border-bottom: 1px solid #2a2a40;
+    margin-bottom: 1.5rem;
 }
+.sfd-header h1 {
+    font-size: 2.2rem; font-weight: 800; letter-spacing: -0.5px; margin: 0 0 0.3rem;
+    background: linear-gradient(135deg, #7c3aed 0%, #c084fc 50%, #38bdf8 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.sfd-header p { color: #7070a0; font-size: 0.92rem; margin: 0; }
+.sfd-badge {
+    display: inline-flex; gap: 1.5rem;
+    margin-top: 1rem; font-size: 0.75rem; color: #6060a0;
+    letter-spacing: 0.04em; text-transform: uppercase;
+}
+.sfd-badge span { display: flex; align-items: center; gap: 0.35rem; }
+.sfd-dot { width: 6px; height: 6px; border-radius: 50%; background: #7c3aed; }
+.step-hd {
+    display: flex; align-items: center; gap: 0.55rem;
+    font-size: 0.88rem; font-weight: 600; color: #c0c0e0;
+    margin: 1.2rem 0 0.6rem;
+}
+.step-hd:first-child { margin-top: 0; }
+.step-no {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: 50%; font-size: 0.72rem; font-weight: 800;
+    background: linear-gradient(135deg, #7c3aed, #5b21b6);
+    color: #fff; flex-shrink: 0; box-shadow: 0 2px 8px rgba(124,58,237,0.5);
+}
+</style>
+<div class="sfd-header">
+    <h1>Synthetic Face Demo</h1>
+    <p>Real-time deepfake demonstration &nbsp;&middot;&nbsp; By <strong style="color:#c4b5fd">Islas Nawaz</strong></p>
+    <div class="sfd-badge">
+        <span><span class="sfd-dot"></span>Watermarked outputs</span>
+        <span><span class="sfd-dot"></span>Educational use only</span>
+        <span><span class="sfd-dot"></span>Consent required</span>
+    </div>
+</div>
 """
 
 with gr.Blocks(title="Synthetic Face Demo — Islas Nawaz") as demo:
 
-    gr.HTML("""
-        <div class="app-header">
-            <h1>Synthetic Face Demo</h1>
-            <p>Real-time deepfake demonstration &nbsp;·&nbsp; By <strong>Islas Nawaz</strong></p>
-        </div>
-        <div class="disclaimer">
-            All outputs are watermarked &nbsp;|&nbsp; Educational use only &nbsp;|&nbsp;
-            Only use faces you have explicit consent to use
-        </div>
-    """)
+    gr.HTML(HEADER_HTML)
 
     with gr.Tabs():
 
         # ── Tab 1: Live Swap ─────────────────────────────────────────────
-        with gr.Tab("Live Face Swap"):
+        with gr.Tab("  Live Face Swap  "):
             with gr.Row(equal_height=False):
 
                 # ── Left sidebar ──────────────────────────────────────────
-                with gr.Column(scale=1, min_width=270):
+                with gr.Column(scale=1, min_width=280):
 
-                    gr.HTML('<div class="step-header"><span class="step-badge">1</span> Upload a face photo</div>')
+                    gr.HTML('<div class="step-hd"><span class="step-no">1</span> Upload a face photo</div>')
                     source_photo = gr.Image(
                         type="pil", label="Target face",
-                        sources=["upload"], height=240,
+                        sources=["upload"], height=230,
                         elem_classes=["image-panel"],
                     )
 
-                    gr.HTML('<div class="step-header" style="margin-top:1.2rem"><span class="step-badge">2</span> Lock it in</div>')
-                    lock_btn = gr.Button("Lock in face", variant="primary", elem_classes=["lock-btn"])
+                    gr.HTML('<div class="step-hd"><span class="step-no">2</span> Lock it in</div>')
+                    lock_btn = gr.Button("🔒  Lock in face", variant="primary", elem_id="lock-btn")
                     status = gr.Textbox(
-                        label="Status", interactive=False,
-                        placeholder="Upload a photo and click Lock in face...",
-                        elem_classes=["status-box"], lines=1,
+                        label="", interactive=False, show_label=False,
+                        placeholder="Upload a photo then click Lock in face...",
+                        lines=1,
                     )
                     lock_btn.click(set_source, inputs=source_photo, outputs=status)
 
-                    gr.HTML('<div class="step-header" style="margin-top:1.2rem"><span class="step-badge">3</span> Strike a pose</div>')
-                    expr_state = gr.State("neutral")
-                    gr.HTML("""
-                        <div style="display:flex;gap:8px;margin-bottom:0.25rem">
-                            <div id="eb-wrap" style="display:contents"></div>
-                        </div>
-                    """)
-                    with gr.Row(elem_classes=["expr-row"]):
-                        btn_neutral   = gr.Button("😐\nNeutral",   elem_classes=["expr-btn"])
-                        btn_smile     = gr.Button("😄\nSmile",     elem_classes=["expr-btn"])
-                        btn_angry     = gr.Button("😠\nAngry",     elem_classes=["expr-btn"])
-                        btn_surprised = gr.Button("😮\nSurprised", elem_classes=["expr-btn"])
-                        btn_wink      = gr.Button("😉\nWink",      elem_classes=["expr-btn"])
+                    gr.HTML('<div class="step-hd"><span class="step-no">3</span> Strike a pose on the swap</div>')
+                    with gr.Row(elem_id="expr-row"):
+                        btn_neutral   = gr.Button("😐\nNeutral")
+                        btn_smile     = gr.Button("😄\nSmile")
+                        btn_angry     = gr.Button("😠\nAngry")
+                        btn_surprised = gr.Button("😮\nSurprise")
+                        btn_wink      = gr.Button("😉\nWink")
 
-                    btn_neutral.click(  lambda: "neutral",   outputs=expr_state)
-                    btn_smile.click(    lambda: "smile",     outputs=expr_state)
-                    btn_angry.click(    lambda: "angry",     outputs=expr_state)
-                    btn_surprised.click(lambda: "surprised", outputs=expr_state)
-                    btn_wink.click(     lambda: "wink",      outputs=expr_state)
+                    def _set_expr(e):
+                        EXPRESSION_FILE.write_text(e)
+                        return gr.update()
+
+                    btn_neutral.click(  fn=lambda: _set_expr("neutral"))
+                    btn_smile.click(    fn=lambda: _set_expr("smile"))
+                    btn_angry.click(    fn=lambda: _set_expr("angry"))
+                    btn_surprised.click(fn=lambda: _set_expr("surprised"))
+                    btn_wink.click(     fn=lambda: _set_expr("wink"))
 
                 # ── Right panel: webcam + result ──────────────────────────
                 with gr.Column(scale=2):
-                    gr.HTML('<div class="step-header"><span class="step-badge">4</span> Enable your webcam — swap happens live</div>')
+                    gr.HTML('<div class="step-hd" style="margin-top:0"><span class="step-no">4</span> Enable your webcam — swap is live</div>')
                     with gr.Row():
                         webcam = gr.Image(
                             label="Your webcam",
                             sources=["webcam"], streaming=True,
-                            type="numpy", height=340,
+                            type="numpy", height=350,
                             elem_classes=["image-panel"],
                         )
                         output = gr.Image(
                             label="Swapped result",
-                            type="numpy", height=340,
+                            type="numpy", height=350,
                             elem_classes=["image-panel"],
                         )
 
             webcam.stream(
                 process_frame,
-                inputs=[webcam, expr_state],
+                inputs=webcam,
                 outputs=output,
                 stream_every=0.1,
                 time_limit=None,
             )
 
         # ── Tab 2: Detection ─────────────────────────────────────────────
-        with gr.Tab("Deepfake Detection"):
-            gr.HTML('<p style="color:var(--muted,#888);margin-bottom:1.2rem;font-size:0.95rem;">Upload any image to analyse whether it looks synthetic.</p>')
+        with gr.Tab("  Deepfake Detection  "):
+            gr.HTML('<p style="color:#7070a0;margin:0.5rem 0 1.2rem;font-size:0.92rem;">Upload any image to check whether it looks AI-generated.</p>')
             with gr.Row():
                 with gr.Column(scale=1):
                     detect_img = gr.Image(
@@ -580,7 +565,7 @@ with gr.Blocks(title="Synthetic Face Demo — Islas Nawaz") as demo:
                         sources=["upload"], height=340,
                         elem_classes=["image-panel"],
                     )
-                    detect_btn = gr.Button("Analyse image", variant="primary", size="lg")
+                    detect_btn = gr.Button("🔍  Analyse image", variant="primary", size="lg")
                 with gr.Column(scale=1):
                     detect_out = gr.Markdown(
                         value="*Upload an image and click Analyse.*",
@@ -588,7 +573,7 @@ with gr.Blocks(title="Synthetic Face Demo — Islas Nawaz") as demo:
                     )
             detect_btn.click(run_detect, inputs=detect_img, outputs=detect_out)
 
-    gr.HTML('<div class="footer">Created by Islas Nawaz for responsible AI education &nbsp;·&nbsp; All outputs watermarked</div>')
+    gr.HTML('<div style="text-align:center;color:#444466;font-size:0.76rem;padding:1.5rem 0 0.5rem;border-top:1px solid #1e1e30;margin-top:2rem">Created by Islas Nawaz for responsible AI education &nbsp;·&nbsp; All outputs watermarked</div>')
 
 if __name__ == "__main__":
     demo.queue().launch(css=CSS, theme=gr.themes.Base())
