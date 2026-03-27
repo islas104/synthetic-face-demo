@@ -176,38 +176,44 @@ def _update_detection(small):
 def _smile_deltas(dst, lm, cx, fh, mid_y):
     for i, (x, y) in enumerate(lm):
         if y > mid_y:
+            # Lift mouth corners strongly, pull centre of lower face up
             x_norm = (x - cx) / (fh * 0.5 + 1e-6)
-            dst[i, 1] -= fh * 0.06 * (x_norm ** 2)
+            dst[i, 1] -= fh * 0.22 * (x_norm ** 2)
+        elif y > mid_y - fh * 0.15:
+            # Cheeks puff outward slightly
+            dst[i, 0] += np.sign(x - cx) * fh * 0.04
 
 
 def _angry_deltas(dst, lm, cx, fh, mid_y):
     for i, (x, y) in enumerate(lm):
         if y < mid_y:
             x_off = x - cx
-            if abs(x_off) < fh * 0.18:
-                dst[i, 1] += fh * 0.06
-                dst[i, 0] += np.sign(x_off) * fh * 0.02
-            else:
-                dst[i, 1] -= fh * 0.02
+            if abs(x_off) < fh * 0.18:        # inner brow → down hard
+                dst[i, 1] += fh * 0.18
+                dst[i, 0] += np.sign(x_off) * fh * 0.06
+            else:                              # outer brow → up
+                dst[i, 1] -= fh * 0.06
         else:
             x_norm = (x - cx) / (fh * 0.5 + 1e-6)
-            dst[i, 1] += fh * 0.03 * x_norm ** 2
+            dst[i, 1] += fh * 0.10 * x_norm ** 2   # mouth corners down
 
 
 def _surprised_deltas(dst, lm, _cx, fh, mid_y):
     for i, (_x, y) in enumerate(lm):
         if y < mid_y:
             t = (mid_y - y) / (fh * 0.55)
-            dst[i, 1] -= fh * 0.07 * min(t, 1.0)
-        elif y > mid_y + fh * 0.25:
-            t = (y - (mid_y + fh * 0.25)) / (fh * 0.2)
-            dst[i, 1] += fh * 0.05 * min(t, 1.0)
+            dst[i, 1] -= fh * 0.22 * min(t, 1.0)   # brows shoot up
+        elif y > mid_y + fh * 0.20:
+            t = (y - (mid_y + fh * 0.20)) / (fh * 0.2)
+            dst[i, 1] += fh * 0.18 * min(t, 1.0)   # mouth drops open
 
 
 def _wink_deltas(dst, lm, cx, fh, mid_y):
     for i, (x, y) in enumerate(lm):
-        if y < mid_y and x > cx:
-            dst[i, 1] += fh * 0.04
+        if y < mid_y and x > cx:               # right eye region → close
+            dst[i, 1] += fh * 0.14
+        elif y > mid_y and x < cx - fh * 0.2:  # left cheek → lift into smile
+            dst[i, 1] -= fh * 0.06
 
 
 _EXPR_FN = {
@@ -269,6 +275,31 @@ def _apply_expression(img_bgr, face, expression):
     return _piecewise_affine_warp(img_bgr, lm, dst)
 
 
+_EXPR_LABEL = {
+    "neutral": "😐 Neutral", "smile": "😄 Smile",
+    "angry": "😠 Angry", "surprised": "😮 Surprised", "wink": "😉 Wink",
+}
+
+
+def _draw_expr_label(img_bgr, expression):
+    """Draw a small expression badge in the top-right corner."""
+    if expression == "neutral":
+        return img_bgr
+    label = _EXPR_LABEL.get(expression, expression)
+    _, w = img_bgr.shape[:2]
+    fs = max(0.5, w / 800)
+    th = max(1, int(fs * 2))
+    (tw, txh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, fs, th)
+    pad = 8
+    x0, y0 = w - tw - pad * 2, 8
+    overlay = img_bgr.copy()
+    cv2.rectangle(overlay, (x0 - pad, y0), (w - pad, y0 + txh + pad * 2), (40, 20, 80), -1)
+    cv2.addWeighted(overlay, 0.75, img_bgr, 0.25, 0, img_bgr)
+    cv2.putText(img_bgr, label, (x0, y0 + txh + pad // 2),
+                cv2.FONT_HERSHEY_SIMPLEX, fs, (200, 180, 255), th, cv2.LINE_AA)
+    return img_bgr
+
+
 def _run_swap(small, orig_w, orig_h, source_face, expression):
     """Swap, apply expression warp, scale up, watermark, return RGB."""
     global _last_swapped
@@ -277,6 +308,7 @@ def _run_swap(small, orig_w, orig_h, source_face, expression):
         result = _swapper.get(result, face, source_face, paste_back=True)
         result = _apply_expression(result, face, expression)
     result = cv2.resize(result, (orig_w, orig_h))
+    result = _draw_expr_label(result, expression)
     result = apply_visible(result)
     _last_swapped = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
     return _last_swapped
