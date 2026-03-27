@@ -337,214 +337,198 @@ def run_detect(img_pil):
 
 CSS = """
 :root {
-    --primary: #6c63ff;
-    --primary-dark: #4b44cc;
-    --bg: #0f0f13;
-    --surface: #1a1a24;
-    --surface2: #22222f;
-    --border: #2e2e42;
+    --primary: #7c3aed;
+    --primary-light: #a78bfa;
+    --primary-dark: #5b21b6;
+    --bg: #0a0a0f;
+    --surface: #13131e;
+    --surface2: #1c1c2e;
+    --surface3: #252538;
+    --border: #2a2a45;
     --text: #e8e8f0;
-    --muted: #888899;
-    --success: #22c55e;
-    --warning: #f59e0b;
+    --muted: #7070a0;
+    --success: #10b981;
 }
 
-body, .gradio-container {
-    background: var(--bg) !important;
-    color: var(--text) !important;
-    font-family: 'Inter', system-ui, sans-serif !important;
-}
+body, .gradio-container { background: var(--bg) !important; color: var(--text) !important; }
 
-/* Header */
+/* ── Header ── */
 .app-header {
-    text-align: center;
-    padding: 2rem 1rem 1rem;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 1.5rem;
+    text-align: center; padding: 2.5rem 1rem 1.5rem;
+    border-bottom: 1px solid var(--border); margin-bottom: 1.5rem;
 }
 .app-header h1 {
-    font-size: 2rem;
-    font-weight: 700;
-    background: linear-gradient(135deg, #6c63ff, #a78bfa);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    margin-bottom: 0.25rem;
+    font-size: 2.4rem; font-weight: 800; letter-spacing: -0.5px;
+    background: linear-gradient(135deg, #7c3aed, #c084fc, #38bdf8);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    margin-bottom: 0.3rem;
 }
-.app-header p { color: var(--muted); font-size: 0.9rem; margin: 0; }
+.app-header p { color: var(--muted); font-size: 0.95rem; margin: 0; }
 
-/* Tabs */
-.tab-nav { border-bottom: 1px solid var(--border) !important; }
-.tab-nav button {
-    color: var(--muted) !important;
-    font-weight: 500 !important;
-    padding: 0.6rem 1.2rem !important;
-}
-.tab-nav button.selected {
-    color: var(--primary) !important;
-    border-bottom: 2px solid var(--primary) !important;
+/* ── Disclaimer ── */
+.disclaimer {
+    background: linear-gradient(135deg, #1a0a3e, #0f102a);
+    border: 1px solid #4c1d95; border-radius: 10px;
+    padding: 0.7rem 1.2rem; font-size: 0.82rem;
+    color: #c4b5fd; text-align: center; margin-bottom: 1.5rem;
+    letter-spacing: 0.01em;
 }
 
-/* Cards */
-.card {
+/* ── Step card ── */
+.step-card {
     background: var(--surface) !important;
     border: 1px solid var(--border) !important;
-    border-radius: 12px !important;
-    padding: 1.25rem !important;
+    border-radius: 16px !important;
+    padding: 1.5rem !important;
+}
+.step-header {
+    display: flex; align-items: center; gap: 0.6rem;
+    margin-bottom: 1rem; font-size: 0.95rem; font-weight: 600;
+}
+.step-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, #7c3aed, #5b21b6);
+    color: white; border-radius: 50%;
+    width: 28px; height: 28px; font-size: 0.75rem; font-weight: 800;
+    flex-shrink: 0; box-shadow: 0 2px 8px rgba(124,58,237,0.4);
 }
 
-/* Step badges */
-.step-label {
-    display: inline-block;
-    background: var(--primary);
-    color: white;
-    border-radius: 50%;
-    width: 24px; height: 24px;
-    line-height: 24px;
-    text-align: center;
-    font-size: 0.75rem;
-    font-weight: 700;
-    margin-right: 0.5rem;
-}
-
-/* Buttons */
-button.primary-btn, .gr-button-primary {
-    background: var(--primary) !important;
-    border: none !important;
-    border-radius: 8px !important;
-    font-weight: 600 !important;
-    transition: background 0.2s !important;
-}
-button.primary-btn:hover, .gr-button-primary:hover {
-    background: var(--primary-dark) !important;
-}
-
-/* Image panels */
-.image-panel .wrap {
+/* ── Image panels ── */
+.image-panel > div { border-radius: 12px !important; overflow: hidden !important; }
+.image-panel .wrap, .image-panel > .wrap {
     background: var(--surface2) !important;
     border: 1px solid var(--border) !important;
-    border-radius: 10px !important;
-    min-height: 300px !important;
+    border-radius: 12px !important; min-height: 280px !important;
 }
 
-/* Status box */
+/* ── Status box ── */
+.status-box { margin-top: 0.5rem !important; }
 .status-box textarea {
-    background: var(--surface2) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 8px !important;
-    color: var(--success) !important;
-    font-size: 0.85rem !important;
+    background: var(--surface2) !important; border: 1px solid var(--border) !important;
+    border-radius: 8px !important; color: var(--success) !important;
+    font-size: 0.85rem !important; font-weight: 500 !important;
 }
 
-/* Disclaimer banner */
-.disclaimer {
-    background: linear-gradient(135deg, #1e1030, #12122a);
-    border: 1px solid #3d2e6e;
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
-    font-size: 0.8rem;
-    color: #a78bfa;
-    text-align: center;
-    margin-bottom: 1rem;
+/* ── Expression buttons ── */
+.expr-row { display: flex !important; gap: 8px !important; margin-top: 0.5rem !important; }
+.expr-btn {
+    flex: 1 !important;
+    background: var(--surface3) !important;
+    border: 1.5px solid var(--border) !important;
+    border-radius: 10px !important; padding: 0.6rem 0.2rem !important;
+    font-size: 1.3rem !important; cursor: pointer !important;
+    transition: all 0.15s ease !important; display: flex !important;
+    flex-direction: column !important; align-items: center !important;
+    gap: 2px !important;
+}
+.expr-btn:hover {
+    border-color: var(--primary-light) !important;
+    background: #1e1040 !important; transform: translateY(-2px) !important;
+    box-shadow: 0 4px 16px rgba(124,58,237,0.3) !important;
+}
+.expr-label {
+    font-size: 0.6rem !important; color: var(--muted) !important;
+    font-weight: 500 !important; text-transform: uppercase !important;
+    letter-spacing: 0.05em !important;
 }
 
-/* Detection result */
+/* ── Lock button ── */
+.lock-btn button {
+    width: 100% !important; background: linear-gradient(135deg, #7c3aed, #5b21b6) !important;
+    border: none !important; border-radius: 10px !important;
+    font-weight: 700 !important; font-size: 1rem !important;
+    padding: 0.75rem !important; letter-spacing: 0.02em !important;
+    box-shadow: 0 4px 20px rgba(124,58,237,0.35) !important;
+    transition: all 0.2s !important;
+}
+.lock-btn button:hover { box-shadow: 0 6px 28px rgba(124,58,237,0.55) !important; }
+
+/* ── Detection result ── */
 .detect-result {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 1.25rem;
-    min-height: 80px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1.5rem; min-height: 100px;
 }
 
-/* Footer */
+/* ── Footer ── */
 .footer {
-    text-align: center;
-    color: var(--muted);
-    font-size: 0.78rem;
-    padding: 1.5rem 0 0.5rem;
-    border-top: 1px solid var(--border);
-    margin-top: 1.5rem;
+    text-align: center; color: var(--muted); font-size: 0.78rem;
+    padding: 1.5rem 0 0.5rem; border-top: 1px solid var(--border); margin-top: 2rem;
 }
 """
 
-with gr.Blocks(title="Synthetic Face Demo — Islas Nawaz", css=CSS, theme=gr.themes.Base()) as demo:
+with gr.Blocks(title="Synthetic Face Demo — Islas Nawaz") as demo:
 
-    # Header
     gr.HTML("""
         <div class="app-header">
             <h1>Synthetic Face Demo</h1>
             <p>Real-time deepfake demonstration &nbsp;·&nbsp; By <strong>Islas Nawaz</strong></p>
         </div>
-    """)
-
-    gr.HTML("""
         <div class="disclaimer">
-            All outputs are watermarked &nbsp;|&nbsp;
-            Educational use only &nbsp;|&nbsp;
+            All outputs are watermarked &nbsp;|&nbsp; Educational use only &nbsp;|&nbsp;
             Only use faces you have explicit consent to use
         </div>
     """)
 
     with gr.Tabs():
 
-        # ── Tab 1: Live Swap ──────────────────────────────────────────────
+        # ── Tab 1: Live Swap ─────────────────────────────────────────────
         with gr.Tab("Live Face Swap"):
             with gr.Row(equal_height=False):
 
-                # Left panel — source photo
-                with gr.Column(scale=1, min_width=280):
-                    gr.HTML('<div style="margin-bottom:0.75rem"><span class="step-label">1</span> <strong>Upload a face photo</strong></div>')
+                # ── Left sidebar ──────────────────────────────────────────
+                with gr.Column(scale=1, min_width=270):
+
+                    gr.HTML('<div class="step-header"><span class="step-badge">1</span> Upload a face photo</div>')
                     source_photo = gr.Image(
-                        type="pil",
-                        label="Whose face do you want?",
-                        sources=["upload"],
-                        height=260,
+                        type="pil", label="Target face",
+                        sources=["upload"], height=240,
                         elem_classes=["image-panel"],
                     )
-                    gr.HTML('<div style="margin:0.75rem 0"><span class="step-label">2</span> <strong>Lock it in</strong></div>')
-                    lock_btn = gr.Button("Lock in face", variant="primary", size="lg")
+
+                    gr.HTML('<div class="step-header" style="margin-top:1.2rem"><span class="step-badge">2</span> Lock it in</div>')
+                    lock_btn = gr.Button("Lock in face", variant="primary", elem_classes=["lock-btn"])
                     status = gr.Textbox(
-                        label="",
-                        interactive=False,
-                        placeholder="Status will appear here...",
-                        elem_classes=["status-box"],
-                        lines=1,
+                        label="Status", interactive=False,
+                        placeholder="Upload a photo and click Lock in face...",
+                        elem_classes=["status-box"], lines=1,
                     )
                     lock_btn.click(set_source, inputs=source_photo, outputs=status)
 
-                # Right panel — webcam + result
-                with gr.Column(scale=2):
-                    gr.HTML('<div style="margin-bottom:0.75rem"><span class="step-label">3</span> <strong>Enable your webcam — swap happens live</strong></div>')
-                    with gr.Row():
-                        webcam = gr.Image(
-                            label="Your webcam",
-                            sources=["webcam"],
-                            streaming=True,
-                            type="numpy",
-                            height=320,
-                            elem_classes=["image-panel"],
-                        )
-                        output = gr.Image(
-                            label="Swapped result",
-                            type="numpy",
-                            height=320,
-                            elem_classes=["image-panel"],
-                        )
-
-                    gr.HTML('<div style="margin:0.75rem 0"><span class="step-label">4</span> <strong>Strike a pose</strong></div>')
-                    with gr.Row():
-                        expr_state = gr.State("neutral")
-                        btn_neutral   = gr.Button("😐 Neutral",   size="sm")
-                        btn_smile     = gr.Button("😄 Smile",     size="sm")
-                        btn_angry     = gr.Button("😠 Angry",     size="sm")
-                        btn_surprised = gr.Button("😮 Surprised", size="sm")
-                        btn_wink      = gr.Button("😉 Wink",      size="sm")
+                    gr.HTML('<div class="step-header" style="margin-top:1.2rem"><span class="step-badge">3</span> Strike a pose</div>')
+                    expr_state = gr.State("neutral")
+                    gr.HTML("""
+                        <div style="display:flex;gap:8px;margin-bottom:0.25rem">
+                            <div id="eb-wrap" style="display:contents"></div>
+                        </div>
+                    """)
+                    with gr.Row(elem_classes=["expr-row"]):
+                        btn_neutral   = gr.Button("😐\nNeutral",   elem_classes=["expr-btn"])
+                        btn_smile     = gr.Button("😄\nSmile",     elem_classes=["expr-btn"])
+                        btn_angry     = gr.Button("😠\nAngry",     elem_classes=["expr-btn"])
+                        btn_surprised = gr.Button("😮\nSurprised", elem_classes=["expr-btn"])
+                        btn_wink      = gr.Button("😉\nWink",      elem_classes=["expr-btn"])
 
                     btn_neutral.click(  lambda: "neutral",   outputs=expr_state)
                     btn_smile.click(    lambda: "smile",     outputs=expr_state)
                     btn_angry.click(    lambda: "angry",     outputs=expr_state)
                     btn_surprised.click(lambda: "surprised", outputs=expr_state)
                     btn_wink.click(     lambda: "wink",      outputs=expr_state)
+
+                # ── Right panel: webcam + result ──────────────────────────
+                with gr.Column(scale=2):
+                    gr.HTML('<div class="step-header"><span class="step-badge">4</span> Enable your webcam — swap happens live</div>')
+                    with gr.Row():
+                        webcam = gr.Image(
+                            label="Your webcam",
+                            sources=["webcam"], streaming=True,
+                            type="numpy", height=340,
+                            elem_classes=["image-panel"],
+                        )
+                        output = gr.Image(
+                            label="Swapped result",
+                            type="numpy", height=340,
+                            elem_classes=["image-panel"],
+                        )
 
             webcam.stream(
                 process_frame,
@@ -556,14 +540,12 @@ with gr.Blocks(title="Synthetic Face Demo — Islas Nawaz", css=CSS, theme=gr.th
 
         # ── Tab 2: Detection ─────────────────────────────────────────────
         with gr.Tab("Deepfake Detection"):
-            gr.HTML('<p style="color:var(--muted,#888);margin-bottom:1rem;">Upload any image to analyse whether it looks synthetic.</p>')
+            gr.HTML('<p style="color:var(--muted,#888);margin-bottom:1.2rem;font-size:0.95rem;">Upload any image to analyse whether it looks synthetic.</p>')
             with gr.Row():
                 with gr.Column(scale=1):
                     detect_img = gr.Image(
-                        type="pil",
-                        label="Image to analyse",
-                        sources=["upload"],
-                        height=320,
+                        type="pil", label="Image to analyse",
+                        sources=["upload"], height=340,
                         elem_classes=["image-panel"],
                     )
                     detect_btn = gr.Button("Analyse image", variant="primary", size="lg")
@@ -577,4 +559,4 @@ with gr.Blocks(title="Synthetic Face Demo — Islas Nawaz", css=CSS, theme=gr.th
     gr.HTML('<div class="footer">Created by Islas Nawaz for responsible AI education &nbsp;·&nbsp; All outputs watermarked</div>')
 
 if __name__ == "__main__":
-    demo.queue().launch()
+    demo.queue().launch(css=CSS, theme=gr.themes.Base())
