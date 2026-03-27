@@ -132,6 +132,7 @@ def set_source(photo_pil):
 
 _frame_idx    = 0
 _cached_faces = None   # last SUCCESSFUL detection — never blanked by a single miss
+_last_swapped = None   # last successfully rendered swap — returned during gaps
 _miss_streak  = 0      # consecutive frames with no detection
 DETECT_EVERY  = 3      # attempt detection every N frames
 MAX_MISS      = 20     # clear cache only after this many consecutive misses
@@ -152,8 +153,35 @@ def _detect_live(small):
     return faces
 
 
+def _update_detection(small):
+    """Run detection every N frames; update cache only on success."""
+    global _cached_faces, _miss_streak
+    if _frame_idx % DETECT_EVERY != 1 and _cached_faces is not None:
+        return
+    found = _detect_live(small)
+    if found:
+        _cached_faces = found
+        _miss_streak  = 0
+    else:
+        _miss_streak += 1
+        if _miss_streak >= MAX_MISS:
+            _cached_faces = None
+
+
+def _run_swap(small, orig_w, orig_h, source_face):
+    """Swap all cached faces and return a watermarked RGB frame."""
+    global _last_swapped
+    result = small.copy()
+    for face in _cached_faces:
+        result = _swapper.get(result, face, source_face, paste_back=True)
+    result = cv2.resize(result, (orig_w, orig_h))
+    result = apply_visible(result)
+    _last_swapped = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+    return _last_swapped
+
+
 def process_frame(webcam_frame):
-    global _frame_idx, _cached_faces, _miss_streak
+    global _frame_idx
 
     try:
         if webcam_frame is None:
@@ -172,33 +200,15 @@ def process_frame(webcam_frame):
             return cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
 
         _frame_idx += 1
-
         orig_h, orig_w = bgr.shape[:2]
-        scale = PROCESS_W / orig_w
-        small = cv2.resize(bgr, (PROCESS_W, int(orig_h * scale)))
+        small = cv2.resize(bgr, (PROCESS_W, int(orig_h * PROCESS_W / orig_w)))
 
-        # Attempt detection every N frames
-        if _frame_idx % DETECT_EVERY == 1 or _cached_faces is None:
-            found = _detect_live(small)
-            if found:
-                _cached_faces = found   # only update cache on success
-                _miss_streak  = 0
-            else:
-                _miss_streak += 1
-                if _miss_streak >= MAX_MISS:
-                    _cached_faces = None  # truly no face for a while — reset
+        _update_detection(small)
 
-        # No face found yet at all — pass through raw feed
         if not _cached_faces:
-            return cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
+            return _last_swapped if _last_swapped is not None else cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
 
-        result = small.copy()
-        for face in _cached_faces:
-            result = _swapper.get(result, face, source_face, paste_back=True)
-
-        result = cv2.resize(result, (orig_w, orig_h))
-        result = apply_visible(result)
-        return cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+        return _run_swap(small, orig_w, orig_h, source_face)
 
     except Exception as e:
         print(f"Frame error: {e}")

@@ -8,7 +8,7 @@ outputs can be identified as AI-generated even after the visible mark is cropped
 import cv2
 import numpy as np
 
-VISIBLE_TEXT = "AI GENERATED — Islas Nawaz"
+VISIBLE_TEXT = "AI GENERATED | Islas Nawaz"
 INVISIBLE_BITS = b"Islas Nawaz synthetic-face-demo"
 
 
