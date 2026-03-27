@@ -1,0 +1,31 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Models (large binary files — download separately)
+models/*.onnx
+models/*.pth
+models/*.pkl
+models/*.bin
+
+# Outputs (may contain PII)
+outputs/
+
+# Environment
+.env
+.env.local
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
