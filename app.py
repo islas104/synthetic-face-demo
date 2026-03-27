@@ -138,40 +138,45 @@ PROCESS_W     = 480    # width to run swap at (lower = faster)
 def process_frame(webcam_frame):
     global _frame_idx, _cached_faces
 
-    if webcam_frame is None:
+    try:
+        if webcam_frame is None:
+            return webcam_frame
+
+        # Gradio 6 sends numpy RGB
+        if not isinstance(webcam_frame, np.ndarray):
+            webcam_frame = np.array(webcam_frame)
+
+        bgr = cv2.cvtColor(webcam_frame, cv2.COLOR_RGB2BGR)
+
+        if not MODEL_OK or _source_face is None:
+            return cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
+
+        _frame_idx += 1
+
+        # Downscale for processing
+        orig_h, orig_w = bgr.shape[:2]
+        scale = PROCESS_W / orig_w
+        small = cv2.resize(bgr, (PROCESS_W, int(orig_h * scale)))
+
+        # Re-detect faces every DETECT_EVERY frames
+        if _frame_idx % DETECT_EVERY == 1 or _cached_faces is None:
+            _cached_faces = _app_live.get(small)
+
+        if not _cached_faces:
+            return cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
+
+        result = small.copy()
+        for face in _cached_faces:
+            result = _swapper.get(result, face, _source_face, paste_back=True)
+
+        result = _color_transfer(result, small)
+        result = cv2.resize(result, (orig_w, orig_h))
+        result = apply_visible(result)
+        return cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+
+    except Exception as e:
+        print(f"Frame error: {e}")
         return webcam_frame
-
-    # Gradio sends RGB — convert to BGR for InsightFace / OpenCV
-    bgr = cv2.cvtColor(webcam_frame, cv2.COLOR_RGB2BGR)
-
-    if not MODEL_OK or _source_face is None:
-        return cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
-
-    _frame_idx += 1
-
-    # Downscale for processing
-    orig_h, orig_w = bgr.shape[:2]
-    scale = PROCESS_W / orig_w
-    small = cv2.resize(bgr, (PROCESS_W, int(orig_h * scale)))
-
-    # Only re-detect faces every DETECT_EVERY frames
-    if _frame_idx % DETECT_EVERY == 1 or _cached_faces is None:
-        _cached_faces = _app_live.get(small)
-
-    if not _cached_faces:
-        # No face found — pass through with watermark
-        return cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
-
-    # Swap
-    result = small.copy()
-    for face in _cached_faces:
-        result = _swapper.get(result, face, _source_face, paste_back=True)
-
-    # Colour correction, then scale back up
-    result = _color_transfer(result, small)
-    result = cv2.resize(result, (orig_w, orig_h))
-    result = apply_visible(result)
-    return cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
 
 
 # ---------------------------------------------------------------------------
@@ -223,10 +228,17 @@ with gr.Blocks(title="Synthetic Face Demo — Islas Nawaz") as demo:
                     label="Your webcam — face will be swapped live",
                     sources=["webcam"],
                     streaming=True,
+                    type="numpy",
                 )
-                output = gr.Image(label="Result (watermarked)", streaming=True)
+                output = gr.Image(label="Result (watermarked)", type="numpy")
 
-        webcam.stream(process_frame, inputs=webcam, outputs=output)
+        webcam.stream(
+            process_frame,
+            inputs=webcam,
+            outputs=output,
+            stream_every=0.1,   # ~10 fps
+            time_limit=None,
+        )
 
     with gr.Tab("Deepfake Detection"):
         gr.Markdown("Upload any image to check whether it appears synthetic.")
