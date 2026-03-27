@@ -27,7 +27,8 @@ MODEL_OK  = False
 MODEL_ERROR = ""
 
 
-def _build_providers():
+def _det_providers():
+    """CoreML works fine for the buffalo_l detection models."""
     import onnxruntime as ort
     order = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
     return [p for p in order if p in ort.get_available_providers()]
@@ -39,21 +40,22 @@ def _load_models():
     import insightface
 
     model_dir = Path(__file__).parent / "models"
-    providers = _build_providers()
-    print(f"Using providers: {providers}")
+    det_providers = _det_providers()
+    print(f"Detection providers: {det_providers}")
 
-    _app_live = FaceAnalysis(name="buffalo_l", root=str(model_dir), providers=providers)
+    _app_live = FaceAnalysis(name="buffalo_l", root=str(model_dir), providers=det_providers)
     _app_live.prepare(ctx_id=0, det_size=(320, 320))
 
-    _app_hd = FaceAnalysis(name="buffalo_l", root=str(model_dir), providers=providers)
+    _app_hd = FaceAnalysis(name="buffalo_l", root=str(model_dir), providers=det_providers)
     _app_hd.prepare(ctx_id=0, det_size=(640, 640))
 
     swap_path = model_dir / "inswapper_128.onnx"
     if not swap_path.exists():
         raise FileNotFoundError("models/inswapper_128.onnx not found.")
 
+    # inswapper_128 is incompatible with CoreML — use CPU only for the swap
     _swapper = insightface.model_zoo.get_model(str(swap_path), download=False,
-                                               providers=providers)
+                                               providers=["CPUExecutionProvider"])
     MODEL_OK = True
 
 
