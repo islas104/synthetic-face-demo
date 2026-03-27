@@ -1,47 +1,39 @@
 """
 Synthetic Face Demo — Real-time Webcam Face Swap
 By Islas Nawaz
-
-Flow:
-  1. Upload a photo of the face you want to become
-  2. Hit "Lock in face", then enable your webcam
-  3. Detection tab lets you analyse any image for deepfake artifacts
 """
 
 import cv2
 import numpy as np
 import gradio as gr
+import pickle
 from pathlib import Path
 
 from core.watermark import apply_visible
 from core.detect import analyze
 
+SOURCE_FACE_FILE = Path("/tmp/synthetic_demo_source.pkl")
+
 # ---------------------------------------------------------------------------
 # Model loading
 # ---------------------------------------------------------------------------
 
-_app_live = None   # 320px — fast, for webcam frames
-_app_hd   = None   # 640px — accurate, for uploaded still photos
+_app_live = None
+_app_hd   = None
 _swapper  = None
 MODEL_OK  = False
 MODEL_ERROR = ""
-
-
-def _det_providers():
-    """CoreML works fine for the buffalo_l detection models."""
-    import onnxruntime as ort
-    order = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
-    return [p for p in order if p in ort.get_available_providers()]
 
 
 def _load_models():
     global _app_live, _app_hd, _swapper, MODEL_OK, MODEL_ERROR
     from insightface.app import FaceAnalysis
     import insightface
+    import onnxruntime as ort
 
     model_dir = Path(__file__).parent / "models"
-    det_providers = _det_providers()
-    print(f"Detection providers: {det_providers}")
+    det_providers = [p for p in ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+                     if p in ort.get_available_providers()]
 
     _app_live = FaceAnalysis(name="buffalo_l", root=str(model_dir), providers=det_providers)
     _app_live.prepare(ctx_id=0, det_size=(320, 320))
@@ -53,9 +45,10 @@ def _load_models():
     if not swap_path.exists():
         raise FileNotFoundError("models/inswapper_128.onnx not found.")
 
-    # inswapper_128 is incompatible with CoreML — use CPU only for the swap
-    _swapper = insightface.model_zoo.get_model(str(swap_path), download=False,
-                                               providers=["CPUExecutionProvider"])
+    # inswapper_128 is incompatible with CoreML — CPU only
+    _swapper = insightface.model_zoo.get_model(
+        str(swap_path), download=False, providers=["CPUExecutionProvider"]
+    )
     MODEL_OK = True
 
 
@@ -67,31 +60,22 @@ except Exception as e:
 
 
 # ---------------------------------------------------------------------------
-# Colour transfer — match swapped face lighting to the webcam frame
+# Source face — saved to disk so both Gradio processes can access it
 # ---------------------------------------------------------------------------
 
-def _color_transfer(swapped_bgr, target_bgr):
-    """Shift swapped image colour stats to match the target frame."""
-    src = cv2.cvtColor(swapped_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
-    dst = cv2.cvtColor(target_bgr,  cv2.COLOR_BGR2LAB).astype(np.float32)
-    for ch in range(3):
-        s_mean, s_std = src[:, :, ch].mean(), src[:, :, ch].std()
-        d_mean, d_std = dst[:, :, ch].mean(), dst[:, :, ch].std()
-        if s_std < 1e-6:
-            continue
-        src[:, :, ch] = (src[:, :, ch] - s_mean) * (d_std / s_std) + d_mean
-    return cv2.cvtColor(np.clip(src, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
+def _save_source(face):
+    with open(SOURCE_FACE_FILE, "wb") as f:
+        pickle.dump(face, f)
 
 
-# ---------------------------------------------------------------------------
-# Source face
-# ---------------------------------------------------------------------------
-
-_source_face = None
+def _load_source():
+    if SOURCE_FACE_FILE.exists():
+        with open(SOURCE_FACE_FILE, "rb") as f:
+            return pickle.load(f)
+    return None
 
 
 def _detect_hd(bgr):
-    """Multi-scale detection using the HD 640px detector."""
     faces = _app_hd.get(bgr)
     if faces:
         return faces
@@ -108,9 +92,8 @@ def _detect_hd(bgr):
 
 
 def set_source(photo_pil):
-    global _source_face
     if photo_pil is None:
-        _source_face = None
+        SOURCE_FACE_FILE.unlink(missing_ok=True)
         return "No photo uploaded."
     if not MODEL_OK:
         return f"Model not loaded: {MODEL_ERROR}"
@@ -118,23 +101,36 @@ def set_source(photo_pil):
     bgr = cv2.cvtColor(np.array(photo_pil.convert("RGB")), cv2.COLOR_RGB2BGR)
     faces = _detect_hd(bgr)
     if not faces:
-        _source_face = None
-        return "No face detected in the photo — try a clearer, front-facing image."
+        return "No face detected — try a clearer, front-facing photo."
 
-    _source_face = sorted(faces,
+    best = sorted(faces,
         key=lambda f: (f.bbox[2]-f.bbox[0]) * (f.bbox[3]-f.bbox[1]),
         reverse=True)[0]
-    return "Face locked in. Enable your webcam below."
+
+    _save_source(best)
+    return "✓ Face locked in. Enable your webcam below."
 
 
 # ---------------------------------------------------------------------------
 # Live frame processing
 # ---------------------------------------------------------------------------
 
-_frame_idx   = 0
-_cached_faces = None   # last InsightFace detections on the live frame
-DETECT_EVERY  = 3      # re-run face detection every N frames
-PROCESS_W     = 480    # width to run swap at (lower = faster)
+_frame_idx    = 0
+_cached_faces = None
+DETECT_EVERY  = 3
+PROCESS_W     = 480
+
+
+def _color_transfer(swapped, target):
+    src = cv2.cvtColor(swapped, cv2.COLOR_BGR2LAB).astype(np.float32)
+    dst = cv2.cvtColor(target,  cv2.COLOR_BGR2LAB).astype(np.float32)
+    for ch in range(3):
+        s_mean, s_std = src[:,:,ch].mean(), src[:,:,ch].std()
+        d_mean, d_std = dst[:,:,ch].mean(), dst[:,:,ch].std()
+        if s_std < 1e-6:
+            continue
+        src[:,:,ch] = (src[:,:,ch] - s_mean) * (d_std / s_std) + d_mean
+    return cv2.cvtColor(np.clip(src, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
 
 
 def process_frame(webcam_frame):
@@ -144,23 +140,25 @@ def process_frame(webcam_frame):
         if webcam_frame is None:
             return webcam_frame
 
-        # Gradio 6 sends numpy RGB
         if not isinstance(webcam_frame, np.ndarray):
             webcam_frame = np.array(webcam_frame)
 
         bgr = cv2.cvtColor(webcam_frame, cv2.COLOR_RGB2BGR)
 
-        if not MODEL_OK or _source_face is None:
+        if not MODEL_OK:
+            return cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
+
+        # Load source face from disk (works across processes)
+        source_face = _load_source()
+        if source_face is None:
             return cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
 
         _frame_idx += 1
 
-        # Downscale for processing
         orig_h, orig_w = bgr.shape[:2]
         scale = PROCESS_W / orig_w
         small = cv2.resize(bgr, (PROCESS_W, int(orig_h * scale)))
 
-        # Re-detect faces every DETECT_EVERY frames
         if _frame_idx % DETECT_EVERY == 1 or _cached_faces is None:
             _cached_faces = _app_live.get(small)
 
@@ -169,7 +167,7 @@ def process_frame(webcam_frame):
 
         result = small.copy()
         for face in _cached_faces:
-            result = _swapper.get(result, face, _source_face, paste_back=True)
+            result = _swapper.get(result, face, source_face, paste_back=True)
 
         result = _color_transfer(result, small)
         result = cv2.resize(result, (orig_w, orig_h))
@@ -227,18 +225,18 @@ with gr.Blocks(title="Synthetic Face Demo — Islas Nawaz") as demo:
 
             with gr.Column(scale=2):
                 webcam = gr.Image(
-                    label="Your webcam — face will be swapped live",
+                    label="Your webcam",
                     sources=["webcam"],
                     streaming=True,
                     type="numpy",
                 )
-                output = gr.Image(label="Result (watermarked)", type="numpy")
+                output = gr.Image(label="Result", type="numpy")
 
         webcam.stream(
             process_frame,
             inputs=webcam,
             outputs=output,
-            stream_every=0.1,   # ~10 fps
+            stream_every=0.1,
             time_limit=None,
         )
 
