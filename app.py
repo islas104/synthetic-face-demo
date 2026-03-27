@@ -21,7 +21,8 @@ from core.detect import analyze
 # Model loading
 # ---------------------------------------------------------------------------
 
-_app = None
+_app_live = None    # 320px det — fast, for webcam frames
+_app_hd = None      # 640px det — accurate, for uploaded still photos
 _swapper = None
 MODEL_OK = False
 MODEL_ERROR = ""
@@ -36,7 +37,7 @@ def _build_providers():
 
 
 def _load_models():
-    global _app, _swapper, MODEL_OK, MODEL_ERROR
+    global _app_live, _app_hd, _swapper, MODEL_OK, MODEL_ERROR
 
     from insightface.app import FaceAnalysis
     import insightface
@@ -45,10 +46,13 @@ def _load_models():
     providers = _build_providers()
     print(f"Using providers: {providers}")
 
-    # buffalo_s = smaller/faster detector; buffalo_l = more accurate
-    _app = FaceAnalysis(name="buffalo_l", root=str(model_dir), providers=providers)
-    # 320 det_size for live frames — half the compute of 640
-    _app.prepare(ctx_id=0, det_size=(320, 320))
+    # Live detector — small grid, fast
+    _app_live = FaceAnalysis(name="buffalo_l", root=str(model_dir), providers=providers)
+    _app_live.prepare(ctx_id=0, det_size=(320, 320))
+
+    # Still-image detector — full 640 grid, used only for source photo
+    _app_hd = FaceAnalysis(name="buffalo_l", root=str(model_dir), providers=providers)
+    _app_hd.prepare(ctx_id=0, det_size=(640, 640))
 
     swap_path = model_dir / "inswapper_128.onnx"
     if not swap_path.exists():
@@ -132,7 +136,7 @@ class FaceTracker:
         )
 
         if not stable:
-            self.cached_faces = _app.get(frame_bgr)
+            self.cached_faces = _app_live.get(frame_bgr)
             self.last_bboxes = [f.bbox.tolist() for f in self.cached_faces]
             self.miss_count = 0
         else:
@@ -243,13 +247,14 @@ def process_frame(webcam_frame):
 # ---------------------------------------------------------------------------
 
 def _detect_with_fallback(bgr):
-    faces = _app.get(bgr)
+    # Use the HD detector (640px) for still photos — more reliable
+    faces = _app_hd.get(bgr)
     if faces:
         return faces
     for scale in [0.75, 0.5, 0.35]:
         h, w = bgr.shape[:2]
         small = cv2.resize(bgr, (int(w * scale), int(h * scale)))
-        faces = _app.get(small)
+        faces = _app_hd.get(small)
         if faces:
             for f in faces:
                 f.bbox /= scale
