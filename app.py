@@ -131,13 +131,15 @@ def set_source(photo_pil):
 # ---------------------------------------------------------------------------
 
 _frame_idx    = 0
-_cached_faces = None
-DETECT_EVERY  = 3
+_cached_faces = None   # last SUCCESSFUL detection — never blanked by a single miss
+_miss_streak  = 0      # consecutive frames with no detection
+DETECT_EVERY  = 3      # attempt detection every N frames
+MAX_MISS      = 20     # clear cache only after this many consecutive misses
 PROCESS_W     = 640
 
 
 def _detect_live(small):
-    """Detect faces in a live frame with one scale-down fallback."""
+    """Detect faces with one scale-down fallback for close-up/large faces."""
     faces = _app_live.get(small)
     if faces:
         return faces
@@ -151,7 +153,7 @@ def _detect_live(small):
 
 
 def process_frame(webcam_frame):
-    global _frame_idx, _cached_faces
+    global _frame_idx, _cached_faces, _miss_streak
 
     try:
         if webcam_frame is None:
@@ -165,7 +167,6 @@ def process_frame(webcam_frame):
         if not MODEL_OK:
             return cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
 
-        # Load source face from disk (works across processes)
         source_face = _load_source()
         if source_face is None:
             return cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
@@ -176,9 +177,18 @@ def process_frame(webcam_frame):
         scale = PROCESS_W / orig_w
         small = cv2.resize(bgr, (PROCESS_W, int(orig_h * scale)))
 
+        # Attempt detection every N frames
         if _frame_idx % DETECT_EVERY == 1 or _cached_faces is None:
-            _cached_faces = _detect_live(small)
+            found = _detect_live(small)
+            if found:
+                _cached_faces = found   # only update cache on success
+                _miss_streak  = 0
+            else:
+                _miss_streak += 1
+                if _miss_streak >= MAX_MISS:
+                    _cached_faces = None  # truly no face for a while — reset
 
+        # No face found yet at all — pass through raw feed
         if not _cached_faces:
             return cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
 
@@ -186,7 +196,6 @@ def process_frame(webcam_frame):
         for face in _cached_faces:
             result = _swapper.get(result, face, source_face, paste_back=True)
 
-        # No colour transfer — it was washing out the swap effect
         result = cv2.resize(result, (orig_w, orig_h))
         result = apply_visible(result)
         return cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
