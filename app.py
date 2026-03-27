@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import gradio as gr
 from pathlib import Path
+from scipy.spatial import Delaunay
 
 from core.watermark import apply_visible
 from core.detect import analyze
@@ -168,23 +169,123 @@ def _update_detection(small):
             _cached_faces = None
 
 
-def _run_swap(small, orig_w, orig_h, source_face):
-    """Swap all cached faces and return a watermarked RGB frame."""
+# ---------------------------------------------------------------------------
+# Expression warping
+# ---------------------------------------------------------------------------
+
+def _smile_deltas(dst, lm, cx, fh, mid_y):
+    for i, (x, y) in enumerate(lm):
+        if y > mid_y:
+            x_norm = (x - cx) / (fh * 0.5 + 1e-6)
+            dst[i, 1] -= fh * 0.06 * (x_norm ** 2)
+
+
+def _angry_deltas(dst, lm, cx, fh, mid_y):
+    for i, (x, y) in enumerate(lm):
+        if y < mid_y:
+            x_off = x - cx
+            if abs(x_off) < fh * 0.18:
+                dst[i, 1] += fh * 0.06
+                dst[i, 0] += np.sign(x_off) * fh * 0.02
+            else:
+                dst[i, 1] -= fh * 0.02
+        else:
+            x_norm = (x - cx) / (fh * 0.5 + 1e-6)
+            dst[i, 1] += fh * 0.03 * x_norm ** 2
+
+
+def _surprised_deltas(dst, lm, _cx, fh, mid_y):
+    for i, (_x, y) in enumerate(lm):
+        if y < mid_y:
+            t = (mid_y - y) / (fh * 0.55)
+            dst[i, 1] -= fh * 0.07 * min(t, 1.0)
+        elif y > mid_y + fh * 0.25:
+            t = (y - (mid_y + fh * 0.25)) / (fh * 0.2)
+            dst[i, 1] += fh * 0.05 * min(t, 1.0)
+
+
+def _wink_deltas(dst, lm, cx, fh, mid_y):
+    for i, (x, y) in enumerate(lm):
+        if y < mid_y and x > cx:
+            dst[i, 1] += fh * 0.04
+
+
+_EXPR_FN = {
+    "smile":     _smile_deltas,
+    "angry":     _angry_deltas,
+    "surprised": _surprised_deltas,
+    "wink":      _wink_deltas,
+}
+
+
+def _compute_expression_deltas(lm, expression):
+    """Return dst landmarks for the given expression using relative face geometry."""
+    lm  = lm.astype(np.float64)
+    dst = lm.copy()
+    fn  = _EXPR_FN.get(expression)
+    if fn is None:
+        return dst
+    cx    = (lm[:, 0].min() + lm[:, 0].max()) / 2
+    fh    = lm[:, 1].max() - lm[:, 1].min()
+    mid_y = lm[:, 1].min() + fh * 0.55
+    fn(dst, lm, cx, fh, mid_y)
+    return dst
+
+
+def _piecewise_affine_warp(img, src_pts, dst_pts):
+    """Warp img using piecewise affine transform on a Delaunay triangulation."""
+    h, w = img.shape[:2]
+    border = np.array([
+        [0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1],
+        [w // 2, 0], [0, h // 2], [w - 1, h // 2], [w // 2, h - 1],
+    ], dtype=np.float64)
+
+    src_all = np.vstack([src_pts, border])
+    dst_all = np.vstack([dst_pts, border])
+
+    tri = Delaunay(dst_all)
+    result = img.copy()
+
+    for simplex in tri.simplices:
+        s = src_all[simplex].astype(np.float32)
+        d = dst_all[simplex].astype(np.float32)
+        M = cv2.getAffineTransform(d, s)          # dst→src (inverse warp)
+        warped = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR)
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillConvexPoly(mask, d.astype(np.int32), 255)
+        result[mask > 0] = warped[mask > 0]
+
+    return result
+
+
+def _apply_expression(img_bgr, face, expression):
+    """Apply expression warp to img_bgr using face.landmark_2d_106."""
+    if expression == "neutral":
+        return img_bgr
+    lm = getattr(face, "landmark_2d_106", None)
+    if lm is None:
+        return img_bgr
+    dst = _compute_expression_deltas(lm, expression)
+    return _piecewise_affine_warp(img_bgr, lm, dst)
+
+
+def _run_swap(small, orig_w, orig_h, source_face, expression):
+    """Swap, apply expression warp, scale up, watermark, return RGB."""
     global _last_swapped
     result = small.copy()
     for face in _cached_faces:
         result = _swapper.get(result, face, source_face, paste_back=True)
+        result = _apply_expression(result, face, expression)
     result = cv2.resize(result, (orig_w, orig_h))
     result = apply_visible(result)
     _last_swapped = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
     return _last_swapped
 
 
-def process_frame(webcam_frame):
+def process_frame(webcam_frame, expression):
     global _frame_idx
 
     try:
-        # No webcam frame yet — leave the output panel untouched
         if webcam_frame is None:
             return gr.skip()
 
@@ -193,7 +294,6 @@ def process_frame(webcam_frame):
 
         bgr = cv2.cvtColor(webcam_frame, cv2.COLOR_RGB2BGR)
 
-        # No source face locked in yet — skip updating the result panel
         source_face = _load_source()
         if not MODEL_OK or source_face is None:
             return gr.skip()
@@ -205,10 +305,9 @@ def process_frame(webcam_frame):
         _update_detection(small)
 
         if not _cached_faces:
-            # Hold the last good swap frame — never go blank
             return _last_swapped if _last_swapped is not None else gr.skip()
 
-        return _run_swap(small, orig_w, orig_h, source_face)
+        return _run_swap(small, orig_w, orig_h, source_face, expression)
 
     except Exception as e:
         print(f"Frame error: {e}")
@@ -432,9 +531,24 @@ with gr.Blocks(title="Synthetic Face Demo — Islas Nawaz", css=CSS, theme=gr.th
                             elem_classes=["image-panel"],
                         )
 
+                    gr.HTML('<div style="margin:0.75rem 0"><span class="step-label">4</span> <strong>Strike a pose</strong></div>')
+                    with gr.Row():
+                        expr_state = gr.State("neutral")
+                        btn_neutral   = gr.Button("😐 Neutral",   size="sm")
+                        btn_smile     = gr.Button("😄 Smile",     size="sm")
+                        btn_angry     = gr.Button("😠 Angry",     size="sm")
+                        btn_surprised = gr.Button("😮 Surprised", size="sm")
+                        btn_wink      = gr.Button("😉 Wink",      size="sm")
+
+                    btn_neutral.click(  lambda: "neutral",   outputs=expr_state)
+                    btn_smile.click(    lambda: "smile",     outputs=expr_state)
+                    btn_angry.click(    lambda: "angry",     outputs=expr_state)
+                    btn_surprised.click(lambda: "surprised", outputs=expr_state)
+                    btn_wink.click(     lambda: "wink",      outputs=expr_state)
+
             webcam.stream(
                 process_frame,
-                inputs=webcam,
+                inputs=[webcam, expr_state],
                 outputs=output,
                 stream_every=0.1,
                 time_limit=None,
