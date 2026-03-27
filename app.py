@@ -128,46 +128,7 @@ def set_source(photo_pil):
     return "✓ Face locked in. Enable your webcam below."
 
 
-# ---------------------------------------------------------------------------
-# Live frame processing
-# ---------------------------------------------------------------------------
-
-_frame_idx    = 0
-_cached_faces = None   # last SUCCESSFUL detection — never blanked by a single miss
-_last_swapped = None   # last successfully rendered swap — returned during gaps
-_miss_streak  = 0      # consecutive frames with no detection
-DETECT_EVERY  = 3      # attempt detection every N frames
-MAX_MISS      = 20     # clear cache only after this many consecutive misses
-PROCESS_W     = 640
-
-
-def _detect_live(small):
-    """Detect faces with one scale-down fallback for close-up/large faces."""
-    faces = _app_live.get(small)
-    if faces:
-        return faces
-    h, w = small.shape[:2]
-    shrunk = cv2.resize(small, (int(w * 0.75), int(h * 0.75)))
-    faces = _app_live.get(shrunk)
-    for f in faces:
-        f.bbox /= 0.75
-        f.kps  /= 0.75
-    return faces
-
-
-def _update_detection(small):
-    """Run detection every N frames; update cache only on success."""
-    global _cached_faces, _miss_streak
-    if _frame_idx % DETECT_EVERY != 1 and _cached_faces is not None:
-        return
-    found = _detect_live(small)
-    if found:
-        _cached_faces = found
-        _miss_streak  = 0
-    else:
-        _miss_streak += 1
-        if _miss_streak >= MAX_MISS:
-            _cached_faces = None
+PROCESS_W = 640
 
 
 # ---------------------------------------------------------------------------
@@ -273,9 +234,10 @@ def _read_expression():
         return "neutral"
 
 
-def _apply_expression(img_bgr, face):
+def _apply_expression(img_bgr, face, expression=None):
     """Apply expression warp to img_bgr using face.landmark_2d_106."""
-    expression = _read_expression()
+    if expression is None:
+        expression = _read_expression()
     if expression == "neutral":
         return img_bgr, expression
     lm = getattr(face, "landmark_2d_106", None)
@@ -310,51 +272,54 @@ def _draw_expr_label(img_bgr, expression):
     return img_bgr
 
 
-def _run_swap(small, orig_w, orig_h, source_face):
-    """Swap, apply expression warp, scale up, watermark, return RGB."""
-    global _last_swapped
+def _swap_photo(photo_rgb, expression):
+    """
+    Core swap pipeline for a single photo (no streaming).
+    photo_rgb: numpy RGB image from webcam capture.
+    expression: string e.g. "smile".
+    Returns (result_rgb, status_str).
+    """
+    if not MODEL_OK:
+        return None, f"Model error: {MODEL_ERROR}"
+    source_face = _load_source()
+    if source_face is None:
+        return None, "No face locked in — upload a photo and click Lock in face first."
+
+    bgr = cv2.cvtColor(photo_rgb, cv2.COLOR_RGB2BGR)
+    orig_h, orig_w = bgr.shape[:2]
+    small = cv2.resize(bgr, (PROCESS_W, int(orig_h * PROCESS_W / orig_w)))
+
+    faces = _detect_hd(small)
+    if not faces:
+        return None, "No face detected in your photo — try better lighting."
+
     result = small.copy()
-    expression = "neutral"
-    for face in _cached_faces:
+    final_expr = expression
+    for face in faces:
         result = _swapper.get(result, face, source_face, paste_back=True)
-        result, expression = _apply_expression(result, face)
+        result, final_expr = _apply_expression(result, face, expression)
+
     result = cv2.resize(result, (orig_w, orig_h))
-    result = _draw_expr_label(result, expression)
+    result = _draw_expr_label(result, final_expr)
     result = apply_visible(result)
-    _last_swapped = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
-    return _last_swapped
+    return cv2.cvtColor(result, cv2.COLOR_BGR2RGB), "Done!"
 
 
-def process_frame(webcam_frame):
-    global _frame_idx
+def capture_and_swap(photo, expression):
+    """Called by the Capture & Swap button."""
+    if photo is None:
+        return None, None, "Enable your webcam and capture a photo first."
+    result, msg = _swap_photo(np.array(photo), expression)
+    stored = photo if result is not None else None
+    return result, stored, msg
 
-    try:
-        if webcam_frame is None:
-            return gr.skip()
 
-        if not isinstance(webcam_frame, np.ndarray):
-            webcam_frame = np.array(webcam_frame)
-
-        bgr = cv2.cvtColor(webcam_frame, cv2.COLOR_RGB2BGR)
-
-        source_face = _load_source()
-        if not MODEL_OK or source_face is None:
-            return gr.skip()
-
-        _frame_idx += 1
-        orig_h, orig_w = bgr.shape[:2]
-        small = cv2.resize(bgr, (PROCESS_W, int(orig_h * PROCESS_W / orig_w)))
-
-        _update_detection(small)
-
-        if not _cached_faces:
-            return _last_swapped if _last_swapped is not None else gr.skip()
-
-        return _run_swap(small, orig_w, orig_h, source_face)
-
-    except Exception as e:
-        print(f"Frame error: {e}")
-        return _last_swapped if _last_swapped is not None else gr.skip()
+def reswap(stored_photo, expression):
+    """Re-apply swap with a different expression on the stored photo."""
+    if stored_photo is None:
+        return None, "Capture a photo first."
+    result, msg = _swap_photo(np.array(stored_photo), expression)
+    return result, msg
 
 
 # ---------------------------------------------------------------------------
@@ -468,25 +433,40 @@ with gr.Blocks(title="Synthetic Face Demo — Islas Nawaz") as demo:
 
                 # ── Main video area ───────────────────────────────────────
                 with gr.Column(scale=3):
+                    expr_state    = gr.State("neutral")
+                    stored_photo  = gr.State(None)
+
                     with gr.Row():
                         with gr.Column():
-                            gr.HTML('<div class="vid-label">&#9654; Your webcam</div>')
+                            gr.HTML('<div class="vid-label">📷 Your webcam</div>')
                             webcam = gr.Image(
                                 label="", show_label=False,
-                                sources=["webcam"], streaming=True,
-                                type="numpy", height=400,
-                                elem_classes=["vid-panel"],
+                                sources=["webcam"], type="pil",
+                                height=400, elem_classes=["vid-panel"],
+                            )
+                            capture_btn = gr.Button(
+                                "📸  Capture & Swap", variant="primary", size="lg"
                             )
                         with gr.Column():
-                            gr.HTML('<div class="vid-label">&#10024; Swapped result</div>')
+                            gr.HTML('<div class="vid-label">✨ Swapped result</div>')
                             output = gr.Image(
                                 label="", show_label=False,
                                 type="numpy", height=400,
                                 elem_classes=["vid-panel"],
                             )
+                            swap_status = gr.Textbox(
+                                label="", show_label=False, interactive=False,
+                                placeholder="Result will appear here...", lines=1,
+                            )
+
+                    capture_btn.click(
+                        capture_and_swap,
+                        inputs=[webcam, expr_state],
+                        outputs=[output, stored_photo, swap_status],
+                    )
 
             # ── Pose toolbar — full width below videos ────────────────────
-            gr.HTML('<div class="ctrl-label" style="margin-top:1rem"><span class="ctrl-num">3</span> Strike a pose</div>')
+            gr.HTML('<div class="ctrl-label" style="margin-top:1rem"><span class="ctrl-num">3</span> Strike a pose (re-applies to captured photo)</div>')
             with gr.Row(elem_id="pose-bar"):
                 btn_neutral   = gr.Button("😐\nNeutral")
                 btn_smile     = gr.Button("😄\nSmile")
@@ -494,23 +474,16 @@ with gr.Blocks(title="Synthetic Face Demo — Islas Nawaz") as demo:
                 btn_surprised = gr.Button("😮\nSurprised")
                 btn_wink      = gr.Button("😉\nWink")
 
-            def _set_expr(e):
-                EXPRESSION_FILE.write_text(e)
-                return gr.update()
-
-            btn_neutral.click(  fn=lambda: _set_expr("neutral"))
-            btn_smile.click(    fn=lambda: _set_expr("smile"))
-            btn_angry.click(    fn=lambda: _set_expr("angry"))
-            btn_surprised.click(fn=lambda: _set_expr("surprised"))
-            btn_wink.click(     fn=lambda: _set_expr("wink"))
-
-            webcam.stream(
-                process_frame,
-                inputs=webcam,
-                outputs=output,
-                stream_every=0.1,
-                time_limit=None,
-            )
+            for btn, expr in [
+                (btn_neutral, "neutral"), (btn_smile, "smile"),
+                (btn_angry, "angry"), (btn_surprised, "surprised"),
+                (btn_wink, "wink"),
+            ]:
+                btn.click(
+                    fn=reswap,
+                    inputs=[stored_photo, gr.State(expr)],
+                    outputs=[output, swap_status],
+                )
 
         # ── Tab 2: Detection ─────────────────────────────────────────────
         with gr.Tab("Deepfake Detection"):
