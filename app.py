@@ -184,20 +184,19 @@ def process_frame(webcam_frame):
     global _frame_idx
 
     try:
+        # No webcam frame yet — leave the output panel untouched
         if webcam_frame is None:
-            return webcam_frame
+            return gr.skip()
 
         if not isinstance(webcam_frame, np.ndarray):
             webcam_frame = np.array(webcam_frame)
 
         bgr = cv2.cvtColor(webcam_frame, cv2.COLOR_RGB2BGR)
 
-        if not MODEL_OK:
-            return cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
-
+        # No source face locked in yet — skip updating the result panel
         source_face = _load_source()
-        if source_face is None:
-            return cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
+        if not MODEL_OK or source_face is None:
+            return gr.skip()
 
         _frame_idx += 1
         orig_h, orig_w = bgr.shape[:2]
@@ -206,13 +205,14 @@ def process_frame(webcam_frame):
         _update_detection(small)
 
         if not _cached_faces:
-            return _last_swapped if _last_swapped is not None else cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
+            # Hold the last good swap frame — never go blank
+            return _last_swapped if _last_swapped is not None else gr.skip()
 
         return _run_swap(small, orig_w, orig_h, source_face)
 
     except Exception as e:
         print(f"Frame error: {e}")
-        return webcam_frame
+        return _last_swapped if _last_swapped is not None else gr.skip()
 
 
 # ---------------------------------------------------------------------------
