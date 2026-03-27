@@ -4,92 +4,266 @@ By Islas Nawaz
 
 Flow:
   1. Upload a photo of the face you want to become
-  2. Hit "Start" — your webcam feed has that face swapped onto you live
+  2. Hit "Lock in face", then enable your webcam
   3. Detection tab lets you analyse any image for deepfake artifacts
 """
 
 import cv2
 import numpy as np
 import gradio as gr
-from PIL import Image
+import threading
+from pathlib import Path
 
 from core.watermark import apply_visible
 from core.detect import analyze
 
 # ---------------------------------------------------------------------------
-# Model loading (done once at startup)
+# Model loading
 # ---------------------------------------------------------------------------
 
 _app = None
 _swapper = None
+MODEL_OK = False
+MODEL_ERROR = ""
+
+
+def _build_providers():
+    """Prefer CoreML (Apple Silicon / macOS GPU) then fall back to CPU."""
+    import onnxruntime as ort
+    available = ort.get_available_providers()
+    order = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+    return [p for p in order if p in available]
 
 
 def _load_models():
-    global _app, _swapper
-    if _app is not None:
-        return
+    global _app, _swapper, MODEL_OK, MODEL_ERROR
 
     from insightface.app import FaceAnalysis
     import insightface
-    from pathlib import Path
 
     model_dir = Path(__file__).parent / "models"
-    _app = FaceAnalysis(name="buffalo_l", root=str(model_dir))
-    _app.prepare(ctx_id=0, det_size=(640, 640))
+    providers = _build_providers()
+    print(f"Using providers: {providers}")
+
+    # buffalo_s = smaller/faster detector; buffalo_l = more accurate
+    _app = FaceAnalysis(name="buffalo_l", root=str(model_dir), providers=providers)
+    # 320 det_size for live frames — half the compute of 640
+    _app.prepare(ctx_id=0, det_size=(320, 320))
 
     swap_path = model_dir / "inswapper_128.onnx"
     if not swap_path.exists():
         raise FileNotFoundError(
             "models/inswapper_128.onnx not found.\n"
-            "Run: curl -L https://huggingface.co/deepinsight/inswapper/resolve/main/inswapper_128.onnx "
+            "Run: curl -L https://github.com/deepinsight/insightface/releases/download/v0.7/inswapper_128.onnx "
             "-o models/inswapper_128.onnx"
         )
-    _swapper = insightface.model_zoo.get_model(str(swap_path), download=False)
+    _swapper = insightface.model_zoo.get_model(str(swap_path), download=False,
+                                               providers=providers)
+    MODEL_OK = True
 
 
 try:
     _load_models()
-    MODEL_OK = True
-except FileNotFoundError as e:
-    MODEL_OK = False
+except Exception as e:
     MODEL_ERROR = str(e)
+    print(f"Model load error: {e}")
 
 
 # ---------------------------------------------------------------------------
-# Core processing
+# Colour transfer (Lab histogram matching for better blending)
 # ---------------------------------------------------------------------------
 
-# Cache the extracted source face embedding so we don't re-detect every frame
+def _color_transfer(src_bgr: np.ndarray, dst_bgr: np.ndarray) -> np.ndarray:
+    """
+    Transfer the colour statistics of dst onto src so that the swapped
+    face matches the lighting/skin tone of the target frame.
+    """
+    src_lab = cv2.cvtColor(src_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    dst_lab = cv2.cvtColor(dst_bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+
+    for ch in range(3):
+        src_mean, src_std = src_lab[:, :, ch].mean(), src_lab[:, :, ch].std()
+        dst_mean, dst_std = dst_lab[:, :, ch].mean(), dst_lab[:, :, ch].std()
+        if src_std < 1e-6:
+            continue
+        src_lab[:, :, ch] = (src_lab[:, :, ch] - src_mean) * (dst_std / src_std) + dst_mean
+
+    src_lab = np.clip(src_lab, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(src_lab, cv2.COLOR_LAB2BGR)
+
+
+# ---------------------------------------------------------------------------
+# IoU face tracker — skip detection when face is stable
+# ---------------------------------------------------------------------------
+
+def _iou(a, b) -> float:
+    """Intersection-over-Union of two bboxes [x1,y1,x2,y2]."""
+    xa = max(a[0], b[0]); ya = max(a[1], b[1])
+    xb = min(a[2], b[2]); yb = min(a[3], b[3])
+    inter = max(0, xb - xa) * max(0, yb - ya)
+    area_a = (a[2] - a[0]) * (a[3] - a[1])
+    area_b = (b[2] - b[0]) * (b[3] - b[1])
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+class FaceTracker:
+    IOU_THRESHOLD = 0.55   # if overlap > this, reuse cached face
+    MAX_MISS = 8           # force re-detect after this many missed frames
+
+    def __init__(self):
+        self.cached_faces = None
+        self.last_bboxes = []
+        self.miss_count = 0
+        self.frame_count = 0
+
+    def get_faces(self, frame_bgr):
+        self.frame_count += 1
+        current_bboxes = self._quick_bboxes(frame_bgr)
+
+        stable = (
+            self.cached_faces is not None
+            and self.miss_count < self.MAX_MISS
+            and len(current_bboxes) == len(self.last_bboxes)
+            and all(
+                _iou(c, l) > self.IOU_THRESHOLD
+                for c, l in zip(current_bboxes, self.last_bboxes)
+            )
+        )
+
+        if not stable:
+            self.cached_faces = _app.get(frame_bgr)
+            self.last_bboxes = [f.bbox.tolist() for f in self.cached_faces]
+            self.miss_count = 0
+        else:
+            self.miss_count += 1
+
+        return self.cached_faces
+
+    @staticmethod
+    def _quick_bboxes(frame_bgr):
+        """Fast Haar cascade pre-check to see if face count changed."""
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        detector = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+        faces = detector.detectMultiScale(gray, 1.1, 4, minSize=(60, 60))
+        if len(faces) == 0:
+            return []
+        return [[x, y, x + w, y + h] for x, y, w, h in faces]
+
+
+_tracker = FaceTracker()
+
+
+# ---------------------------------------------------------------------------
+# Threaded frame pipeline
+# ---------------------------------------------------------------------------
+
 _source_face = None
+_last_result = None          # last successfully processed RGB frame
+_pipeline_lock = threading.Lock()
+_processing = False          # True while a swap is in progress
 
+PROCESS_WIDTH = 480          # swap resolution — lower = faster
+
+
+def _swap_worker(bgr_orig):
+    """Runs in a background thread. Writes to _last_result when done."""
+    global _last_result, _processing
+
+    try:
+        orig_h, orig_w = bgr_orig.shape[:2]
+        scale = PROCESS_WIDTH / orig_w
+        small = cv2.resize(bgr_orig, (PROCESS_WIDTH, int(orig_h * scale)))
+
+        faces = _tracker.get_faces(small)
+        if not faces:
+            out = apply_visible(bgr_orig)
+            with _pipeline_lock:
+                _last_result = cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
+            return
+
+        result = small.copy()
+        with _pipeline_lock:
+            sf = _source_face
+        if sf is None:
+            return
+
+        for face in faces:
+            result = _swapper.get(result, face, sf, paste_back=True)
+
+        # Colour transfer to match target lighting
+        result = _color_transfer(result, small)
+
+        result = cv2.resize(result, (orig_w, orig_h))
+        result = apply_visible(result)
+
+        with _pipeline_lock:
+            _last_result = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+
+    finally:
+        _processing = False
+
+
+def process_frame(webcam_frame):
+    """
+    Called for every webcam frame by Gradio.
+    Kicks off a background swap if one isn't already running,
+    and immediately returns the last completed result (non-blocking).
+    """
+    global _processing, _last_result
+
+    if webcam_frame is None:
+        return _last_result
+
+    bgr = cv2.cvtColor(webcam_frame, cv2.COLOR_RGB2BGR)
+
+    if not MODEL_OK or _source_face is None:
+        out = apply_visible(bgr)
+        return cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
+
+    if not _processing:
+        _processing = True
+        t = threading.Thread(target=_swap_worker, args=(bgr,), daemon=True)
+        t.start()
+
+    with _pipeline_lock:
+        result = _last_result
+
+    # On first frame before any result is ready, return the raw feed
+    if result is None:
+        return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Source face setup
+# ---------------------------------------------------------------------------
 
 def _detect_with_fallback(bgr):
-    """Try detection at multiple scales to handle close-up / large faces."""
     faces = _app.get(bgr)
     if faces:
         return faces
-
-    # If no face found, try resizing down — helps with very close-up shots
     for scale in [0.75, 0.5, 0.35]:
         h, w = bgr.shape[:2]
         small = cv2.resize(bgr, (int(w * scale), int(h * scale)))
         faces = _app.get(small)
         if faces:
-            # Scale bounding boxes back up so embeddings align with original
             for f in faces:
                 f.bbox /= scale
                 f.kps /= scale
             return faces
-
     return []
 
 
 def set_source(photo_pil):
-    """Extract and cache the face embedding from the uploaded photo."""
-    global _source_face
+    global _source_face, _last_result
 
     if photo_pil is None:
-        _source_face = None
+        with _pipeline_lock:
+            _source_face = None
         return "No photo uploaded."
 
     if not MODEL_OK:
@@ -99,66 +273,17 @@ def set_source(photo_pil):
     faces = _detect_with_fallback(bgr)
 
     if not faces:
-        _source_face = None
+        with _pipeline_lock:
+            _source_face = None
         return "No face detected. Try a photo with better lighting or a slightly wider crop."
 
-    # Pick the largest face
-    _source_face = sorted(
-        faces,
-        key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
-        reverse=True
-    )[0]
+    best = sorted(faces, key=lambda f: (f.bbox[2]-f.bbox[0])*(f.bbox[3]-f.bbox[1]), reverse=True)[0]
 
-    return "Face locked in. Ready — start your webcam stream below."
+    with _pipeline_lock:
+        _source_face = best
+        _last_result = None   # flush cached result so next frame is fresh
 
-
-_frame_count = 0
-_cached_target_faces = None
-DETECT_EVERY_N = 4      # re-run face detection only every 4 frames
-PROCESS_WIDTH = 480     # downscale webcam feed before swap (faster on CPU)
-
-
-def process_frame(webcam_frame):
-    """
-    Called for every webcam frame.
-    webcam_frame: numpy array (RGB) from Gradio's webcam stream.
-    Returns: numpy array (RGB) to display.
-    """
-    global _frame_count, _cached_target_faces
-
-    if webcam_frame is None:
-        return webcam_frame
-
-    _frame_count += 1
-
-    # Gradio sends RGB; InsightFace needs BGR
-    bgr = cv2.cvtColor(webcam_frame, cv2.COLOR_RGB2BGR)
-
-    if _source_face is None or not MODEL_OK:
-        overlay = apply_visible(bgr)
-        return cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-
-    # Downscale for processing, keep original for output blending
-    orig_h, orig_w = bgr.shape[:2]
-    scale = PROCESS_WIDTH / orig_w
-    small = cv2.resize(bgr, (PROCESS_WIDTH, int(orig_h * scale)))
-
-    # Re-detect faces only every N frames to reduce CPU load
-    if _frame_count % DETECT_EVERY_N == 1 or _cached_target_faces is None:
-        _cached_target_faces = _app.get(small)
-
-    if not _cached_target_faces:
-        overlay = apply_visible(bgr)
-        return cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-
-    result = small.copy()
-    for face in _cached_target_faces:
-        result = _swapper.get(result, face, _source_face, paste_back=True)
-
-    # Scale result back to original resolution
-    result = cv2.resize(result, (orig_w, orig_h))
-    result = apply_visible(result)
-    return cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+    return "Face locked in. Ready — enable your webcam below."
 
 
 # ---------------------------------------------------------------------------
