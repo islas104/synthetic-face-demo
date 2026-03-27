@@ -41,8 +41,9 @@ def _load_models():
     det_providers = [p for p in ["CoreMLExecutionProvider", "CPUExecutionProvider"]
                      if p in ort.get_available_providers()]
 
+    # Both detectors use 640 — matches our PROCESS_W so no scale mismatch
     _app_live = FaceAnalysis(name="buffalo_l", root=str(model_dir), providers=det_providers)
-    _app_live.prepare(ctx_id=0, det_size=(320, 320))
+    _app_live.prepare(ctx_id=0, det_size=(640, 640))
 
     _app_hd = FaceAnalysis(name="buffalo_l", root=str(model_dir), providers=det_providers)
     _app_hd.prepare(ctx_id=0, det_size=(640, 640))
@@ -73,11 +74,20 @@ def _save_source(face):
     np.save(str(SOURCE_FACE_FILE), face.normed_embedding)
 
 
+_source_cache      = None   # in-memory cache
+_source_cache_mtime = None  # mtime when cache was last loaded
+
 def _load_source():
-    if SOURCE_FACE_FILE.exists():
-        embedding = np.load(str(SOURCE_FACE_FILE))
-        return _FaceEmbed(embedding)
-    return None
+    """Return cached source face, reloading from disk only if the file changed."""
+    global _source_cache, _source_cache_mtime
+    if not SOURCE_FACE_FILE.exists():
+        _source_cache = None
+        return None
+    mtime = SOURCE_FACE_FILE.stat().st_mtime
+    if _source_cache is None or mtime != _source_cache_mtime:
+        _source_cache       = _FaceEmbed(np.load(str(SOURCE_FACE_FILE)))
+        _source_cache_mtime = mtime
+    return _source_cache
 
 
 def _detect_hd(bgr):
@@ -123,8 +133,21 @@ def set_source(photo_pil):
 _frame_idx    = 0
 _cached_faces = None
 DETECT_EVERY  = 3
-PROCESS_W     = 640   # higher res = better quality swap
+PROCESS_W     = 640
 
+
+def _detect_live(small):
+    """Detect faces in a live frame with one scale-down fallback."""
+    faces = _app_live.get(small)
+    if faces:
+        return faces
+    h, w = small.shape[:2]
+    shrunk = cv2.resize(small, (int(w * 0.75), int(h * 0.75)))
+    faces = _app_live.get(shrunk)
+    for f in faces:
+        f.bbox /= 0.75
+        f.kps  /= 0.75
+    return faces
 
 
 def process_frame(webcam_frame):
@@ -154,7 +177,7 @@ def process_frame(webcam_frame):
         small = cv2.resize(bgr, (PROCESS_W, int(orig_h * scale)))
 
         if _frame_idx % DETECT_EVERY == 1 or _cached_faces is None:
-            _cached_faces = _app_live.get(small)
+            _cached_faces = _detect_live(small)
 
         if not _cached_faces:
             return cv2.cvtColor(apply_visible(bgr), cv2.COLOR_BGR2RGB)
