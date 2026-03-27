@@ -4,6 +4,8 @@
 
 This project demonstrates synthetic face generation and face-swapping techniques to raise awareness about deepfake technology, its capabilities, and how to detect it. Every output is watermarked and the pipeline requires explicit consent at each step.
 
+![Synthetic Face Demo UI](assets/DemoScreenshotUI.png)
+
 ---
 
 ## What this is
