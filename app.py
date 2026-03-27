@@ -200,54 +200,231 @@ def run_detect(img_pil):
 # UI
 # ---------------------------------------------------------------------------
 
-with gr.Blocks(title="Synthetic Face Demo — Islas Nawaz") as demo:
-    gr.Markdown(
-        "# Synthetic Face Demo\n"
-        "**By Islas Nawaz** — real-time webcam face swap for responsible AI education.\n\n"
-        "> All outputs are watermarked. Only use faces you have consent to use."
-    )
+CSS = """
+:root {
+    --primary: #6c63ff;
+    --primary-dark: #4b44cc;
+    --bg: #0f0f13;
+    --surface: #1a1a24;
+    --surface2: #22222f;
+    --border: #2e2e42;
+    --text: #e8e8f0;
+    --muted: #888899;
+    --success: #22c55e;
+    --warning: #f59e0b;
+}
 
-    with gr.Tab("Live Face Swap"):
-        gr.Markdown(
-            "**Step 1** — Upload a photo of the face you want to wear.\n\n"
-            "**Step 2** — Click *Lock in face*, then enable your webcam below."
-        )
-        with gr.Row():
-            with gr.Column(scale=1):
-                source_photo = gr.Image(
-                    type="pil",
-                    label="Whose face do you want?",
-                    sources=["upload"],
-                )
-                lock_btn = gr.Button("Lock in face", variant="primary")
-                status = gr.Textbox(label="Status", interactive=False)
-                lock_btn.click(set_source, inputs=source_photo, outputs=status)
+body, .gradio-container {
+    background: var(--bg) !important;
+    color: var(--text) !important;
+    font-family: 'Inter', system-ui, sans-serif !important;
+}
 
-            with gr.Column(scale=2):
-                webcam = gr.Image(
-                    label="Your webcam",
-                    sources=["webcam"],
-                    streaming=True,
-                    type="numpy",
-                )
-                output = gr.Image(label="Result", type="numpy")
+/* Header */
+.app-header {
+    text-align: center;
+    padding: 2rem 1rem 1rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 1.5rem;
+}
+.app-header h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #6c63ff, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 0.25rem;
+}
+.app-header p { color: var(--muted); font-size: 0.9rem; margin: 0; }
 
-        webcam.stream(
-            process_frame,
-            inputs=webcam,
-            outputs=output,
-            stream_every=0.1,
-            time_limit=None,
-        )
+/* Tabs */
+.tab-nav { border-bottom: 1px solid var(--border) !important; }
+.tab-nav button {
+    color: var(--muted) !important;
+    font-weight: 500 !important;
+    padding: 0.6rem 1.2rem !important;
+}
+.tab-nav button.selected {
+    color: var(--primary) !important;
+    border-bottom: 2px solid var(--primary) !important;
+}
 
-    with gr.Tab("Deepfake Detection"):
-        gr.Markdown("Upload any image to check whether it appears synthetic.")
-        detect_img = gr.Image(type="pil", label="Image to analyse")
-        detect_btn = gr.Button("Analyse", variant="primary")
-        detect_out = gr.Markdown()
-        detect_btn.click(run_detect, inputs=detect_img, outputs=detect_out)
+/* Cards */
+.card {
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 12px !important;
+    padding: 1.25rem !important;
+}
 
-    gr.Markdown("---\n*Created by Islas Nawaz for educational purposes.*")
+/* Step badges */
+.step-label {
+    display: inline-block;
+    background: var(--primary);
+    color: white;
+    border-radius: 50%;
+    width: 24px; height: 24px;
+    line-height: 24px;
+    text-align: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    margin-right: 0.5rem;
+}
+
+/* Buttons */
+button.primary-btn, .gr-button-primary {
+    background: var(--primary) !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    transition: background 0.2s !important;
+}
+button.primary-btn:hover, .gr-button-primary:hover {
+    background: var(--primary-dark) !important;
+}
+
+/* Image panels */
+.image-panel .wrap {
+    background: var(--surface2) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 10px !important;
+    min-height: 300px !important;
+}
+
+/* Status box */
+.status-box textarea {
+    background: var(--surface2) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    color: var(--success) !important;
+    font-size: 0.85rem !important;
+}
+
+/* Disclaimer banner */
+.disclaimer {
+    background: linear-gradient(135deg, #1e1030, #12122a);
+    border: 1px solid #3d2e6e;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    font-size: 0.8rem;
+    color: #a78bfa;
+    text-align: center;
+    margin-bottom: 1rem;
+}
+
+/* Detection result */
+.detect-result {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem;
+    min-height: 80px;
+}
+
+/* Footer */
+.footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.78rem;
+    padding: 1.5rem 0 0.5rem;
+    border-top: 1px solid var(--border);
+    margin-top: 1.5rem;
+}
+"""
+
+with gr.Blocks(title="Synthetic Face Demo — Islas Nawaz", css=CSS, theme=gr.themes.Base()) as demo:
+
+    # Header
+    gr.HTML("""
+        <div class="app-header">
+            <h1>Synthetic Face Demo</h1>
+            <p>Real-time deepfake demonstration &nbsp;·&nbsp; By <strong>Islas Nawaz</strong></p>
+        </div>
+    """)
+
+    gr.HTML("""
+        <div class="disclaimer">
+            All outputs are watermarked &nbsp;|&nbsp;
+            Educational use only &nbsp;|&nbsp;
+            Only use faces you have explicit consent to use
+        </div>
+    """)
+
+    with gr.Tabs():
+
+        # ── Tab 1: Live Swap ──────────────────────────────────────────────
+        with gr.Tab("Live Face Swap"):
+            with gr.Row(equal_height=False):
+
+                # Left panel — source photo
+                with gr.Column(scale=1, min_width=280):
+                    gr.HTML('<div style="margin-bottom:0.75rem"><span class="step-label">1</span> <strong>Upload a face photo</strong></div>')
+                    source_photo = gr.Image(
+                        type="pil",
+                        label="Whose face do you want?",
+                        sources=["upload"],
+                        height=260,
+                        elem_classes=["image-panel"],
+                    )
+                    gr.HTML('<div style="margin:0.75rem 0"><span class="step-label">2</span> <strong>Lock it in</strong></div>')
+                    lock_btn = gr.Button("Lock in face", variant="primary", size="lg")
+                    status = gr.Textbox(
+                        label="",
+                        interactive=False,
+                        placeholder="Status will appear here...",
+                        elem_classes=["status-box"],
+                        lines=1,
+                    )
+                    lock_btn.click(set_source, inputs=source_photo, outputs=status)
+
+                # Right panel — webcam + result
+                with gr.Column(scale=2):
+                    gr.HTML('<div style="margin-bottom:0.75rem"><span class="step-label">3</span> <strong>Enable your webcam — swap happens live</strong></div>')
+                    with gr.Row():
+                        webcam = gr.Image(
+                            label="Your webcam",
+                            sources=["webcam"],
+                            streaming=True,
+                            type="numpy",
+                            height=320,
+                            elem_classes=["image-panel"],
+                        )
+                        output = gr.Image(
+                            label="Swapped result",
+                            type="numpy",
+                            height=320,
+                            elem_classes=["image-panel"],
+                        )
+
+            webcam.stream(
+                process_frame,
+                inputs=webcam,
+                outputs=output,
+                stream_every=0.1,
+                time_limit=None,
+            )
+
+        # ── Tab 2: Detection ─────────────────────────────────────────────
+        with gr.Tab("Deepfake Detection"):
+            gr.HTML('<p style="color:var(--muted,#888);margin-bottom:1rem;">Upload any image to analyse whether it looks synthetic.</p>')
+            with gr.Row():
+                with gr.Column(scale=1):
+                    detect_img = gr.Image(
+                        type="pil",
+                        label="Image to analyse",
+                        sources=["upload"],
+                        height=320,
+                        elem_classes=["image-panel"],
+                    )
+                    detect_btn = gr.Button("Analyse image", variant="primary", size="lg")
+                with gr.Column(scale=1):
+                    detect_out = gr.Markdown(
+                        value="*Upload an image and click Analyse.*",
+                        elem_classes=["detect-result"],
+                    )
+            detect_btn.click(run_detect, inputs=detect_img, outputs=detect_out)
+
+    gr.HTML('<div class="footer">Created by Islas Nawaz for responsible AI education &nbsp;·&nbsp; All outputs watermarked</div>')
 
 if __name__ == "__main__":
     demo.queue().launch()
