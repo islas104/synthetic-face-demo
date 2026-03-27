@@ -6,13 +6,19 @@ By Islas Nawaz
 import cv2
 import numpy as np
 import gradio as gr
-import pickle
 from pathlib import Path
 
 from core.watermark import apply_visible
 from core.detect import analyze
 
-SOURCE_FACE_FILE = Path("/tmp/synthetic_demo_source.pkl")
+# Only the normed_embedding is needed by inswapper — save as plain numpy
+SOURCE_FACE_FILE = Path("/tmp/synthetic_demo_source.npy")
+
+
+class _FaceEmbed:
+    """Minimal face-like object carrying just the embedding inswapper needs."""
+    def __init__(self, normed_embedding):
+        self.normed_embedding = normed_embedding
 
 # ---------------------------------------------------------------------------
 # Model loading
@@ -64,14 +70,13 @@ except Exception as e:
 # ---------------------------------------------------------------------------
 
 def _save_source(face):
-    with open(SOURCE_FACE_FILE, "wb") as f:
-        pickle.dump(face, f)
+    np.save(str(SOURCE_FACE_FILE), face.normed_embedding)
 
 
 def _load_source():
     if SOURCE_FACE_FILE.exists():
-        with open(SOURCE_FACE_FILE, "rb") as f:
-            return pickle.load(f)
+        embedding = np.load(str(SOURCE_FACE_FILE))
+        return _FaceEmbed(embedding)
     return None
 
 
@@ -118,19 +123,8 @@ def set_source(photo_pil):
 _frame_idx    = 0
 _cached_faces = None
 DETECT_EVERY  = 3
-PROCESS_W     = 480
+PROCESS_W     = 640   # higher res = better quality swap
 
-
-def _color_transfer(swapped, target):
-    src = cv2.cvtColor(swapped, cv2.COLOR_BGR2LAB).astype(np.float32)
-    dst = cv2.cvtColor(target,  cv2.COLOR_BGR2LAB).astype(np.float32)
-    for ch in range(3):
-        s_mean, s_std = src[:,:,ch].mean(), src[:,:,ch].std()
-        d_mean, d_std = dst[:,:,ch].mean(), dst[:,:,ch].std()
-        if s_std < 1e-6:
-            continue
-        src[:,:,ch] = (src[:,:,ch] - s_mean) * (d_std / s_std) + d_mean
-    return cv2.cvtColor(np.clip(src, 0, 255).astype(np.uint8), cv2.COLOR_LAB2BGR)
 
 
 def process_frame(webcam_frame):
@@ -169,7 +163,7 @@ def process_frame(webcam_frame):
         for face in _cached_faces:
             result = _swapper.get(result, face, source_face, paste_back=True)
 
-        result = _color_transfer(result, small)
+        # No colour transfer — it was washing out the swap effect
         result = cv2.resize(result, (orig_w, orig_h))
         result = apply_visible(result)
         return cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
