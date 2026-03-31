@@ -17,3 +17,8 @@ invisible-watermark>=0.2.0
 timm>=0.9.0                # backbone models
 torch>=2.0.0
 torchvision>=0.15.0
+
+# Lip-sync (Wav2Lip)
+gTTS>=2.3.0                # text-to-speech (requires internet)
+librosa>=0.10.0            # mel spectrogram
+scipy>=1.11.0              # preemphasis filter

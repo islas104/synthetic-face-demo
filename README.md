@@ -4,14 +4,19 @@
 
 This project demonstrates synthetic face generation and face-swapping techniques to raise awareness about deepfake technology, its capabilities, and how to detect it. Every output is watermarked and the pipeline requires explicit consent at each step.
 
-![Synthetic Face Demo UI](assets/UI.png)
+![Live Face Swap](assets/Screenshot%202026-03-31%20at%2021.40.40.png)
+
+| Talking Face | Deepfake Detection |
+|---|---|
+| ![Talking Face](assets/Screenshot%202026-03-31%20at%2021.40.54.png) | ![Deepfake Detection](assets/Screenshot%202026-03-31%20at%2021.41.04.png) |
 
 ---
 
 ## What this is
 
 - Face detection and analysis using InsightFace
-- Face swap on static images
+- Real-time face swap on captured webcam photos
+- **Talking face** — type any text and the swapped face lip-syncs to it (Wav2Lip GAN + gTTS)
 - Watermarked outputs (visible + invisible)
 - Built-in deepfake detection to show the other side of the coin
 - Simple Gradio web UI — no API keys required
@@ -44,6 +49,15 @@ python app.py
 
 Open http://localhost:7860 in your browser.
 
+### Talking Face (optional)
+
+To enable the lip-sync tab, download the Wav2Lip GAN model:
+
+```bash
+pip install gdown
+gdown 15G3U08c8xsCkOqQxE38Z2XXDnPcOptNk -O models/wav2lip.pth
+```
+
 ---
 
 ## Project structure
@@ -54,7 +68,8 @@ synthetic-face-demo/
 ├── core/
 │   ├── swap.py         # Face swap pipeline
 │   ├── watermark.py    # Visible + invisible watermarking
-│   └── detect.py       # Deepfake detection
+│   ├── detect.py       # Deepfake detection
+│   └── lipsync.py      # Wav2Lip talking-face pipeline
 ├── models/             # Downloaded model weights (git-ignored)
 ├── samples/            # Example images for demo
 ├── requirements.txt

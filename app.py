@@ -11,6 +11,7 @@ from scipy.spatial import Delaunay
 
 from core.watermark import apply_visible
 from core.detect import analyze
+from core import lipsync as _lipsync_mod
 
 # Only the normed_embedding is needed by inswapper — save as plain numpy
 SOURCE_FACE_FILE = Path("/tmp/synthetic_demo_source.npy")
@@ -323,6 +324,26 @@ def reswap(stored_photo, expression):
 
 
 # ---------------------------------------------------------------------------
+# Talking face tab
+# ---------------------------------------------------------------------------
+
+def run_lipsync(stored_photo, text):
+    if stored_photo is None:
+        return None, "Capture and swap a face first (Step 2 on the Live Face Swap tab)."
+    if not text or not text.strip():
+        return None, "Enter some text for them to say."
+    if not _lipsync_mod.is_available():
+        return None, (
+            "Wav2Lip model not found. Download wav2lip.pth from the "
+            "Wav2Lip GitHub releases page and place it in models/."
+        )
+    video_path, msg = _lipsync_mod.lipsync(
+        np.array(stored_photo), text.strip(), _app_hd
+    )
+    return video_path, msg
+
+
+# ---------------------------------------------------------------------------
 # Detection tab
 # ---------------------------------------------------------------------------
 
@@ -485,7 +506,33 @@ with gr.Blocks(title="Synthetic Face Demo — Islas Nawaz") as demo:
                     outputs=[output, swap_status],
                 )
 
-        # ── Tab 2: Detection ─────────────────────────────────────────────
+        # ── Tab 2: Talking Face ──────────────────────────────────────────
+        with gr.Tab("Talking Face"):
+            gr.HTML('<p style="color:#606080;margin:0.5rem 0 1rem;font-size:0.88rem;">Type what the swapped face should say. Requires <code>models/wav2lip.pth</code> — see the Wav2Lip GitHub releases.</p>')
+            with gr.Row():
+                with gr.Column(scale=1):
+                    talk_text = gr.Textbox(
+                        label="Words to speak",
+                        placeholder="Hello, I am a synthetic face...",
+                        lines=4,
+                    )
+                    talk_btn = gr.Button("🗣️  Generate talking face", variant="primary", size="lg")
+                    talk_status = gr.Textbox(
+                        label="", show_label=False, interactive=False,
+                        placeholder="Status will appear here...", lines=1,
+                    )
+                with gr.Column(scale=2):
+                    talk_video = gr.Video(
+                        label="", show_label=False,
+                        height=400, elem_classes=["vid-panel"],
+                    )
+            talk_btn.click(
+                run_lipsync,
+                inputs=[stored_photo, talk_text],
+                outputs=[talk_video, talk_status],
+            )
+
+        # ── Tab 3: Detection ─────────────────────────────────────────────
         with gr.Tab("Deepfake Detection"):
             gr.HTML('<p style="color:#606080;margin:0.5rem 0 1rem;font-size:0.88rem;">Upload any image to check whether it looks AI-generated.</p>')
             with gr.Row():
